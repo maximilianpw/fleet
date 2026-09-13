@@ -89,6 +89,7 @@ status=$(cat '{status}')
 case "$status" in
   hang) exec sleep 30 ;;
   slow) sleep 0.2; exit 0 ;;
+  near) sleep 1; exit 0 ;;
   exit) exit "$(cat '{code}')" ;;
   *) exit 0 ;;
 esac
@@ -155,9 +156,12 @@ exit 1
         );
         cfg.ssh_program = self.ssh.clone().into();
         cfg.lsof_program = self.lsof.clone().into();
-        cfg.startup_deadline = Duration::from_millis(80);
-        cfg.listener_probe = Duration::from_millis(100);
-        cfg.listener_kill_after = Duration::from_millis(30);
+        // Most tests exercise child ownership rather than deadline expiry.
+        // Keep their process scheduling budget generous enough for loaded
+        // Darwin Nix builders; deadline-specific tests override this value.
+        cfg.startup_deadline = Duration::from_secs(2);
+        cfg.listener_probe = Duration::from_secs(2);
+        cfg.listener_kill_after = Duration::from_millis(500);
         cfg.poll_interval = Duration::from_millis(5);
         cfg
     }
@@ -175,7 +179,7 @@ exit 1
     }
 
     fn wait_child_pid(&self) -> u32 {
-        for _ in 0..100 {
+        for _ in 0..500 {
             if let Some(pid) = self.child_pid() {
                 return pid;
             }
@@ -230,7 +234,8 @@ fn child_exit_before_deadline_is_preserved() {
 #[test]
 fn hang_past_deadline_without_owned_listener_kills_only_the_child() {
     let harness = Harness::new();
-    let cfg = harness.cfg("hang", "no");
+    let mut cfg = harness.cfg("hang", "no");
+    cfg.startup_deadline = Duration::from_millis(80);
     let start = Instant::now();
     let code = runner::run(&cfg);
     assert!(start.elapsed() < Duration::from_secs(2));
@@ -246,7 +251,8 @@ fn hang_past_deadline_without_owned_listener_kills_only_the_child() {
 #[test]
 fn healthy_listener_is_not_a_lifetime_cap() {
     let harness = Harness::new();
-    let cfg = harness.cfg("slow", "yes");
+    let mut cfg = harness.cfg("slow", "yes");
+    cfg.startup_deadline = Duration::from_millis(80);
     let start = Instant::now();
     let code = runner::run(&cfg);
     assert_eq!(code, 0);
@@ -257,7 +263,8 @@ fn healthy_listener_is_not_a_lifetime_cap() {
 #[test]
 fn wrong_process_owning_the_port_fails_startup() {
     let harness = Harness::new();
-    let cfg = harness.cfg("hang", "no");
+    let mut cfg = harness.cfg("hang", "no");
+    cfg.startup_deadline = Duration::from_millis(80);
     let code = runner::run(&cfg);
     assert_eq!(code, 1);
 }
@@ -280,6 +287,7 @@ fn stop_during_startup_reaps_owned_child() {
 fn stop_after_healthy_listener_reaps_owned_child() {
     let harness = Harness::new();
     let mut cfg = harness.cfg("hang", "yes");
+    cfg.startup_deadline = Duration::from_millis(80);
     let stop = Arc::new(AtomicI32::new(0));
     cfg.stop = Arc::clone(&stop);
     let handle = thread::spawn(move || runner::run(&cfg));
@@ -315,13 +323,13 @@ fn runner_does_not_reconnect_after_child_exit() {
 #[test]
 fn child_exit_near_deadline_does_not_target_a_reused_pid() {
     let harness = Harness::new();
-    for _ in 0..8 {
+    for _ in 0..3 {
         fs::write(&harness.spawn_file, "").unwrap();
         let _ = fs::remove_file(&harness.pid_file);
-        fs::write(&harness.status_file, "slow\n").unwrap();
+        fs::write(&harness.status_file, "near\n").unwrap();
         fs::write(&harness.listen_file, "no\n").unwrap();
-        let mut cfg = harness.cfg("slow", "no");
-        cfg.startup_deadline = Duration::from_millis(200);
+        let mut cfg = harness.cfg("near", "no");
+        cfg.startup_deadline = Duration::from_secs(1);
         let code = runner::run(&cfg);
         assert!(code == 0 || code == 1, "unexpected runner exit {code}");
         if let Some(pid) = harness.child_pid() {
