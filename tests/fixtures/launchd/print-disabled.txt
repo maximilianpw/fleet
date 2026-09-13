@@ -1,0 +1,4 @@
+disabled services = {
+	"com.apple.unrelated" => true
+	"org.nix-community.home.fleet-tunnel-30000" => true
+};

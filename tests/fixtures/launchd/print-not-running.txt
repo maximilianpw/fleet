@@ -1,0 +1,9 @@
+gui/501/org.nix-community.home.fleet-tunnel-3000 = {
+	active count = 0
+	path = /Users/developer/Library/LaunchAgents/org.nix-community.home.fleet-tunnel-3000.plist
+	type = LaunchAgent
+	state = not running
+
+	program = /nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-fleet-tunnel-runner/bin/fleet-tunnel-runner
+	pid =
+};

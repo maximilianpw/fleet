@@ -1,0 +1,34 @@
+# Manual Fleet config for ordinary SSH aliases. No generated tm-* or
+# fleet-forward-* names, and no launchd jobs.
+#
+# See docs/configuration.md for fields, lookup order, and validation.
+
+schema_version = 1
+current_host = "laptop"
+
+[hosts.laptop]
+ssh_target = "laptop"
+aliases = []
+os = "darwin"
+role = "interface"
+user = "developer"
+client_enrolled = true
+gui = true
+long_running_agents = false
+
+[hosts.workbox]
+ssh_target = "workbox"
+forward_target = "workbox"
+aliases = ["dev"]
+os = "linux"
+role = "compute"
+user = "developer"
+client_enrolled = true
+gui = false
+long_running_agents = true
+tmux_command = "tmux"
+tmux_session = "main"
+
+[tunnels]
+supervisor = "none"
+mappings = []
