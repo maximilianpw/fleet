@@ -145,6 +145,14 @@ declares `launchd.agents."fleet-tunnel-PORT"` with Label
 `org.nix-community.home.fleet-tunnel-PORT`. Linux configs do not install
 those jobs.
 
+After a package transition changes a job's `ProgramArguments`, launchd may
+leave the replacement job loaded but stopped or uninitialized. Inspect
+`launchctl print gui/$UID/org.nix-community.home.fleet-tunnel-PORT` and verify
+a fresh, non-multiplexed SSH connection first. `fleet tunnel resume PORT` then
+enables and kickstarts that exact loaded job; it does not delete the plist or
+kill an unrelated listener. Needing this on an unchanged later activation is a
+launchd activation defect rather than expected steady state.
+
 It does not generate SSH identities, overwrite `~/.ssh/config`, register
 Herdr machines, or install public keys. Personal inventory, trust, and
 `hosts.json` / `FLEET.md` exports stay in the consumer.

@@ -568,6 +568,10 @@ pub fn resume(
             return Err(TunnelError::JobStateUnknown { target });
         }
     }
+    // Resume is also the package-migration recovery path. launchd can keep a
+    // replacement job loaded but stopped/uninitialized after ProgramArguments
+    // change; kickstarting that exact label avoids deleting the plist or
+    // touching a listener owned by another process.
     if snap.state != SupervisorState::Running
         && !launchd::launchctl_kickstart(launchd, &target).success()
     {
