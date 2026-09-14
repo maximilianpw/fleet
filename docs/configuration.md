@@ -71,6 +71,10 @@ explicit triples for every remote alias so `fleet ssh dev` can stay
 Local `fleet ssh` uses PATH `tmux` and session `main`, even if remote metadata
 names another executable or session.
 
+`fleet copy` resolves canonical names and aliases through `ssh_target`. Unlike
+shell, run, and ad-hoc forward, copy requires declared host metadata; an
+unknown `HOST:PATH` endpoint is rejected before `scp` starts.
+
 ### Tunnels
 
 ```toml

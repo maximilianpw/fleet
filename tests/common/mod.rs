@@ -89,6 +89,7 @@ pub struct Fixture {
     pub xdg: PathBuf,
     pub bin: PathBuf,
     pub ssh_log: PathBuf,
+    pub scp_log: PathBuf,
     pub tmux_log: PathBuf,
     pub shell_log: PathBuf,
     pub dummy_log: PathBuf,
@@ -127,6 +128,7 @@ impl Fixture {
 
         let fixture = Self {
             ssh_log: root.join("ssh-args"),
+            scp_log: root.join("scp-args"),
             tmux_log: root.join("tmux-args"),
             shell_log: root.join("shell-args"),
             dummy_log: root.join("dummy-args"),
@@ -172,6 +174,7 @@ impl Fixture {
             .env("PATH", self.path())
             .env("SHELL", self.bin.join("fakeshell"))
             .env("FLEET_SSH_ARGS_LOG", &self.ssh_log)
+            .env("FLEET_SCP_ARGS_LOG", &self.scp_log)
             .env("FLEET_TMUX_ARGS_LOG", &self.tmux_log)
             .env("FLEET_SHELL_ARGS_LOG", &self.shell_log)
             .env("FLEET_DUMMY_ARGS_LOG", &self.dummy_log)
@@ -192,6 +195,10 @@ impl Fixture {
 
     pub fn ssh_args(&self) -> Option<Vec<String>> {
         read_lines(&self.ssh_log)
+    }
+
+    pub fn scp_args(&self) -> Option<Vec<String>> {
+        read_lines(&self.scp_log)
     }
 
     pub fn tmux_args(&self) -> Option<Vec<String>> {
@@ -241,6 +248,17 @@ if [ -n "${FLEET_SSH_HOLD:-}" ]; then
   done
 fi
 exit 0
+"#,
+        );
+        write_script(
+            &self.bin.join("scp"),
+            r#"#!/bin/sh
+log=${FLEET_SCP_ARGS_LOG:?}
+: > "$log"
+for arg in "$@"; do
+  printf '%s\n' "$arg" >> "$log"
+done
+exit "${FLEET_SCP_EXIT:-0}"
 "#,
         );
         write_script(

@@ -27,7 +27,7 @@ does not inherit live Joyce/Kim acceptance from Plan 001.
   bracketed forms passed through inside one `-L` argument.
 - Unknown SSH aliases keep command-specific fallbacks: `ssh unknown` uses
   `tm-unknown`; shell/run use `unknown`; forward uses `fleet-forward-unknown`;
-  doctor and t3 still require declared metadata.
+  doctor, t3, and copy still require declared metadata.
 - Managed job labels stay `org.nix-community.home.fleet-tunnel-PORT`. Pause
   intent lives in launchd against those labels. Renaming them is a migration.
 
@@ -36,6 +36,7 @@ does not inherit live Joyce/Kim acceptance from Plan 001.
 - `--version`
 - `completions SHELL`
 - `config validate`
+- `copy SOURCE DESTINATION` for one local-to-remote or remote-to-local file
 
 ## Permitted differences
 
@@ -52,6 +53,24 @@ does not inherit live Joyce/Kim acceptance from Plan 001.
   deletion is refused rather than guessed.
 
 No other silent redesign.
+
+## File copy
+
+`fleet copy` uses OpenSSH `scp` in its default SFTP-backed mode. Fleet does not
+pass `-O` or opt into the legacy SCP protocol. It resolves a canonical host or
+alias to `ssh_target`, passes paths as argv after `--`, and exec-replaces Fleet
+so transfer diagnostics, signals, and exit status come from `scp`.
+
+The first version copies one file and requires exactly one local endpoint and
+one declared remote Fleet endpoint. A bare remote destination means its home
+directory. Pull sources require `HOST:PATH`. Recursive and remote-to-remote
+copy are out of scope. `CURRENT_HOST:PATH` is normalized to a local path.
+Local filenames containing a colon should use an explicit path prefix such as
+`./report:final.md` so they are not parsed as Fleet remote syntax.
+
+Remote path semantics and limitations belong to the installed OpenSSH `scp`
+implementation. Fleet rejects empty and control-character paths, but does not
+add a second quoting language or construct a local shell command.
 
 ## Existing port conflicts
 

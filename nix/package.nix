@@ -58,7 +58,7 @@ in
     '';
 
     meta = {
-      description = "SSH and tmux CLI for a small development fleet";
+      description = "SSH, tmux, and file-copy CLI for a small development fleet";
       homepage = "https://github.com/maximilianpw/fleet";
       mainProgram = "fleet";
       platforms = [

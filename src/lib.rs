@@ -6,6 +6,7 @@
 use std::io;
 
 pub mod config;
+pub mod copy;
 pub mod doctor;
 pub mod forwards;
 pub mod launchd;
@@ -19,6 +20,7 @@ pub use config::{
     FleetConfig, HostConfig, Port, PortError, ResolvedHost, Supervisor, TargetError, TunnelMapping,
     TunnelsConfig, SCHEMA_VERSION,
 };
+pub use copy::{plan_copy, CopyError};
 pub use forwards::{
     collect_forward_rows, ensure_ports_free, forward_local_port, parse_forward_pids,
     render_forward_list, stop_forwards, ConservativeManagedInspector, ForwardError, ForwardRow,
@@ -33,14 +35,15 @@ pub use ssh::{
     AttachmentForward, SshError,
 };
 
-/// Help text preserved from the legacy CLI, plus `config validate` and
-/// `completions`.
+/// Help text preserved from the legacy CLI, plus `copy`, `config validate`,
+/// and `completions`.
 pub const USAGE: &str = "\
 usage:
   fleet list
   fleet ssh HOST [SESSION] [--forward PORT|LOCAL_PORT:REMOTE_PORT]...
   fleet shell HOST
   fleet run HOST COMMAND...
+  fleet copy SOURCE DESTINATION
   fleet forward HOST LOCAL_PORT REMOTE_PORT [REMOTE_HOST]
   fleet forward list [LOCAL_PORT]
   fleet forward stop PID...
@@ -58,6 +61,8 @@ examples:
   fleet ssh workbox agents --forward 3000 --forward 5173
   fleet shell workbox
   fleet run workbox btop
+  fleet copy report.md workbox
+  fleet copy workbox:/tmp/report.md .
   fleet forward workbox 3000 3000
   fleet forward list 3000
   fleet forward delete 12345
@@ -73,6 +78,8 @@ pub enum FleetError {
     Config(#[from] ConfigError),
     #[error(transparent)]
     Ssh(#[from] SshError),
+    #[error(transparent)]
+    Copy(#[from] CopyError),
     #[error(transparent)]
     Forward(#[from] ForwardError),
     #[error(transparent)]
@@ -98,6 +105,7 @@ impl FleetError {
         match self {
             Self::Config(error) => error.exit_code(),
             Self::Ssh(error) => error.exit_code(),
+            Self::Copy(error) => error.exit_code(),
             Self::Forward(error) => error.exit_code(),
             Self::Process(error) => error.exit_code(),
             Self::Port(error) => error.exit_code(),

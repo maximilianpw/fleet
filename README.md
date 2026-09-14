@@ -1,7 +1,8 @@
 # Fleet
 
-CLI for a small SSH/tmux development fleet. OpenSSH is the transport. tmux is
-the `fleet ssh` backend. launchd is the current managed-tunnel supervisor.
+CLI for a small SSH/tmux development fleet. OpenSSH is the transport for
+sessions, forwards, and direct file copy. tmux is the `fleet ssh` backend.
+launchd is the current managed-tunnel supervisor.
 
 This repository packages Fleet independently from any personal Nix
 configuration. The crate is not published to crates.io, and installing this
@@ -86,7 +87,22 @@ fleet --config ./examples/config.toml config validate
 ## Commands
 
 `fleet` with no arguments lists hosts. Other commands: `ssh`, `shell`, `run`,
-`forward`, `t3`, `tunnel`, `doctor`, `config validate`, `completions`.
+`copy`, `forward`, `t3`, `tunnel`, `doctor`, `config validate`, `completions`.
+
+Copy one file to or from a declared remote host with scp-style endpoints:
+
+```sh
+fleet copy report.md workbox
+fleet copy report.md workbox:/tmp/report.md
+fleet copy workbox:/tmp/report.md .
+```
+
+Canonical host names and aliases resolve through Fleet configuration. A bare
+remote destination means that host's home directory. Exactly one endpoint must
+be local; recursive and remote-to-remote copy are not supported. Fleet execs
+OpenSSH `scp` directly, passes paths as argv after `--`, and relies on its
+default SFTP-backed transfer mode. Fleet does not enable legacy SCP protocol
+mode (`scp -O`).
 
 Help, version, and completions do not need a config file.
 

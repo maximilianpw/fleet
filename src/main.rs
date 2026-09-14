@@ -5,6 +5,7 @@ use std::process::ExitCode;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
 use fleet::config::{load_config, parse_port, validate_ssh_target};
+use fleet::copy::plan_copy;
 use fleet::forwards::{
     collect_forward_rows, ensure_ports_free, parse_forward_pids, render_forward_list, stop_forwards,
 };
@@ -52,6 +53,22 @@ enum Commands {
         host: String,
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
+    },
+    /// Copy one file between this machine and a declared remote Fleet host.
+    ///
+    /// A bare destination host copies into the remote user's home directory.
+    /// Use HOST:PATH to choose a remote path. Exactly one endpoint must be
+    /// local; recursive and remote-to-remote copies are not supported.
+    #[command(
+        after_help = "Examples:\n  fleet copy report.md workbox\n  fleet copy report.md workbox:/tmp/report.md\n  fleet copy workbox:/tmp/report.md ."
+    )]
+    Copy {
+        /// Local path, or HOST:PATH when pulling from a declared Fleet host.
+        #[arg(allow_hyphen_values = true)]
+        source: String,
+        /// Local path, HOST:PATH, or a bare declared host for its home directory.
+        #[arg(allow_hyphen_values = true)]
+        destination: String,
     },
     /// Ad-hoc SSH local forwards, plus list/stop of observed forward processes.
     Forward {
@@ -149,6 +166,15 @@ fn run(cli: Cli) -> Result<(), FleetError> {
         Some(Commands::Run { host, command }) => {
             let config = load_config(cli.config.as_deref(), &env)?;
             let planned = plan_run(&config, &host, &command)?;
+            exec_replace(&planned)?;
+            Ok(())
+        }
+        Some(Commands::Copy {
+            source,
+            destination,
+        }) => {
+            let config = load_config(cli.config.as_deref(), &env)?;
+            let planned = plan_copy(&config, &source, &destination)?;
             exec_replace(&planned)?;
             Ok(())
         }
