@@ -62,6 +62,9 @@ struct Harness {
     args_file: PathBuf,
     pid_file: PathBuf,
     spawn_file: PathBuf,
+    ready_file: PathBuf,
+    probe_ready_file: PathBuf,
+    probe_release_file: PathBuf,
     status_file: PathBuf,
     listen_file: PathBuf,
 }
@@ -72,6 +75,9 @@ impl Harness {
         let args_file = dir.0.join("args");
         let pid_file = dir.0.join("pid");
         let spawn_file = dir.0.join("spawns");
+        let ready_file = dir.0.join("ready");
+        let probe_ready_file = dir.0.join("probe-ready");
+        let probe_release_file = dir.0.join("probe-release");
         let status_file = dir.0.join("status");
         let listen_file = dir.0.join("listen");
         fs::write(&spawn_file, "").unwrap();
@@ -88,6 +94,7 @@ printf x >>'{spawns}'
 status=$(cat '{status}')
 case "$status" in
   hang) exec sleep 30 ;;
+  transport) trap 'exit 0' TERM; printf ready >'{ready}'; while :; do sleep 1; done ;;
   slow) sleep 0.2; exit 0 ;;
   near) sleep 1; exit 0 ;;
   exit) exit "$(cat '{code}')" ;;
@@ -97,6 +104,7 @@ esac
                 args = args_file.display(),
                 pid = pid_file.display(),
                 spawns = spawn_file.display(),
+                ready = ready_file.display(),
                 status = status_file.display(),
                 code = dir.0.join("code").display(),
             ),
@@ -106,12 +114,19 @@ esac
             &lsof,
             &format!(
                 r#"#!/bin/sh
-if [ "$(cat '{listen}')" = yes ]; then
-  exit 0
-fi
-exit 1
+case "$(cat '{listen}')" in
+  yes) exit 0 ;;
+  block)
+    printf ready >'{probe_ready}'
+    while [ ! -e '{probe_release}' ]; do sleep 0.01; done
+    exit 1
+    ;;
+  *) exit 1 ;;
+esac
 "#,
                 listen = listen_file.display(),
+                probe_ready = probe_ready_file.display(),
+                probe_release = probe_release_file.display(),
             ),
         );
         Self {
@@ -121,6 +136,9 @@ exit 1
             args_file,
             pid_file,
             spawn_file,
+            ready_file,
+            probe_ready_file,
+            probe_release_file,
             status_file,
             listen_file,
         }
@@ -186,6 +204,26 @@ exit 1
             thread::sleep(Duration::from_millis(10));
         }
         panic!("ssh child did not record a pid");
+    }
+
+    fn wait_child_ready(&self) {
+        for _ in 0..500 {
+            if self.ready_file.is_file() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!("ssh child did not become ready");
+    }
+
+    fn wait_probe_ready(&self) {
+        for _ in 0..500 {
+            if self.probe_ready_file.is_file() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!("listener probe did not become ready");
     }
 }
 
@@ -255,7 +293,7 @@ fn healthy_listener_is_not_a_lifetime_cap() {
     cfg.startup_deadline = Duration::from_millis(80);
     let start = Instant::now();
     let code = runner::run(&cfg);
-    assert_eq!(code, 0);
+    assert_eq!(code, 1);
     assert!(start.elapsed() >= Duration::from_millis(150));
     assert_eq!(harness.spawn_count(), 1);
 }
@@ -304,7 +342,7 @@ fn argument_policy_is_passed_through_unchanged() {
     let harness = Harness::new();
     let cfg = harness.cfg("ok", "no");
     let code = runner::run(&cfg);
-    assert_eq!(code, 0);
+    assert_eq!(code, 1);
     let logged = fs::read_to_string(&harness.args_file).unwrap();
     let got: Vec<&str> = logged.lines().collect();
     assert_eq!(got, production_ssh_args());
@@ -318,6 +356,65 @@ fn runner_does_not_reconnect_after_child_exit() {
     let code = runner::run(&cfg);
     assert_eq!(code, 1);
     assert_eq!(harness.spawn_count(), 1);
+}
+
+#[test]
+fn transport_failure_after_startup_makes_runner_fail() {
+    let harness = Harness::new();
+    let mut cfg = harness.cfg("transport", "yes");
+    cfg.startup_deadline = Duration::from_millis(80);
+    let handle = thread::spawn(move || runner::run(&cfg));
+    let pid = harness.wait_child_pid();
+    harness.wait_child_ready();
+    thread::sleep(Duration::from_millis(120));
+
+    // OpenSSH can handle SIGTERM and report a successful child status. The
+    // runner must still fail so launchd treats the transport loss as restartable.
+    unsafe {
+        let _ = kill(pid as i32, 15);
+    }
+
+    assert_eq!(handle.join().unwrap(), 1);
+    assert!(!pid_alive(pid));
+    assert_eq!(harness.spawn_count(), 1);
+}
+
+#[test]
+fn pending_stop_wins_when_child_exits() {
+    let harness = Harness::new();
+    let mut cfg = harness.cfg("transport", "no");
+    let stop = Arc::new(AtomicI32::new(0));
+    cfg.stop = Arc::clone(&stop);
+    cfg.poll_interval = Duration::from_millis(500);
+    let handle = thread::spawn(move || runner::run(&cfg));
+    let pid = harness.wait_child_pid();
+    harness.wait_child_ready();
+
+    stop.store(15, Ordering::SeqCst);
+    unsafe {
+        let _ = kill(pid as i32, 15);
+    }
+
+    assert_eq!(handle.join().unwrap(), 143);
+    assert!(!pid_alive(pid));
+}
+
+#[test]
+fn stop_during_startup_probe_preserves_signal_exit() {
+    let harness = Harness::new();
+    let mut cfg = harness.cfg("hang", "block");
+    let stop = Arc::new(AtomicI32::new(0));
+    cfg.stop = Arc::clone(&stop);
+    cfg.startup_deadline = Duration::from_millis(30);
+    let handle = thread::spawn(move || runner::run(&cfg));
+    let pid = harness.wait_child_pid();
+    harness.wait_probe_ready();
+
+    stop.store(2, Ordering::SeqCst);
+    fs::write(&harness.probe_release_file, "release\n").unwrap();
+
+    assert_eq!(handle.join().unwrap(), 130);
+    assert!(!pid_alive(pid));
 }
 
 #[test]

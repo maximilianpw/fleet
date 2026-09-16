@@ -130,6 +130,11 @@ pub fn run(cfg: &RunnerConfig) -> i32 {
     let mut healthy = false;
 
     loop {
+        if let Some(code) = stop_exit_code(cfg) {
+            kill_owned(&mut child);
+            return code;
+        }
+
         if let Some(status) = match child.try_wait() {
             Ok(status) => status,
             Err(err) => {
@@ -138,32 +143,50 @@ pub fn run(cfg: &RunnerConfig) -> i32 {
                 return 1;
             }
         } {
-            return exit_status_code(status);
-        }
-
-        let sig = stop_signal(cfg);
-        if sig != 0 {
-            kill_owned(&mut child);
-            return 128 + sig;
+            return child_exit_code(cfg, status);
         }
 
         if !healthy && Instant::now() >= deadline {
             if let Some(status) = child.try_wait().ok().flatten() {
-                return exit_status_code(status);
+                return child_exit_code(cfg, status);
             }
             if child_owns_loopback_listen(cfg, child.id()) {
                 healthy = true;
             } else {
+                if let Some(code) = stop_exit_code(cfg) {
+                    kill_owned(&mut child);
+                    return code;
+                }
                 if let Some(status) = child.try_wait().ok().flatten() {
-                    return exit_status_code(status);
+                    return child_exit_code(cfg, status);
                 }
                 kill_owned(&mut child);
-                return 1;
+                return stop_exit_code(cfg).unwrap_or(1);
             }
         }
 
         thread::sleep(poll);
     }
+}
+
+fn child_exit_code(cfg: &RunnerConfig, status: std::process::ExitStatus) -> i32 {
+    if let Some(code) = stop_exit_code(cfg) {
+        return code;
+    }
+    // The SSH process is expected to live until the runner asks it to stop.
+    // OpenSSH may report status 0 after transport loss, but launchd needs a
+    // failure status to restart the managed tunnel.
+    let code = exit_status_code(status);
+    if code == 0 {
+        1
+    } else {
+        code
+    }
+}
+
+fn stop_exit_code(cfg: &RunnerConfig) -> Option<i32> {
+    let sig = stop_signal(cfg);
+    (sig != 0).then_some(128 + sig)
 }
 
 fn stop_signal(cfg: &RunnerConfig) -> i32 {
