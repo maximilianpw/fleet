@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use fleet::runner::{self, RunnerConfig, STARTUP_DEADLINE};
+use fleet::runner::{self, RunnerConfig, RETRY_BACKOFF, STARTUP_DEADLINE};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -64,7 +64,6 @@ struct Harness {
     spawn_file: PathBuf,
     ready_file: PathBuf,
     probe_ready_file: PathBuf,
-    probe_release_file: PathBuf,
     status_file: PathBuf,
     listen_file: PathBuf,
 }
@@ -91,13 +90,13 @@ impl Harness {
 printf '%s\n' "$@" >'{args}'
 printf '%s\n' "$$" >'{pid}'
 printf x >>'{spawns}'
-status=$(cat '{status}')
+IFS= read -r status <'{status}'
 case "$status" in
   hang) exec sleep 30 ;;
   transport) trap 'exit 0' TERM; printf ready >'{ready}'; while :; do sleep 1; done ;;
   slow) sleep 0.2; exit 0 ;;
   near) sleep 1; exit 0 ;;
-  exit) exit "$(cat '{code}')" ;;
+  exit) IFS= read -r code <'{code}'; exit "$code" ;;
   *) exit 0 ;;
 esac
 "#,
@@ -114,7 +113,8 @@ esac
             &lsof,
             &format!(
                 r#"#!/bin/sh
-case "$(cat '{listen}')" in
+IFS= read -r listen <'{listen}'
+case "$listen" in
   yes) exit 0 ;;
   block)
     printf ready >'{probe_ready}'
@@ -138,7 +138,6 @@ esac
             spawn_file,
             ready_file,
             probe_ready_file,
-            probe_release_file,
             status_file,
             listen_file,
         }
@@ -181,6 +180,7 @@ esac
         cfg.listener_probe = Duration::from_secs(2);
         cfg.listener_kill_after = Duration::from_millis(500);
         cfg.poll_interval = Duration::from_millis(5);
+        cfg.retry_backoff = Duration::from_millis(30);
         cfg
     }
 
@@ -204,6 +204,19 @@ esac
             thread::sleep(Duration::from_millis(10));
         }
         panic!("ssh child did not record a pid");
+    }
+
+    fn wait_spawn_count(&self, expected: usize) {
+        for _ in 0..500 {
+            if self.spawn_count() >= expected {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!(
+            "ssh child spawn count did not reach {expected}; got {}",
+            self.spawn_count()
+        );
     }
 
     fn wait_child_ready(&self) {
@@ -255,56 +268,96 @@ fn production_ssh_args() -> Vec<&'static str> {
 #[test]
 fn production_startup_deadline_is_forty_five_seconds() {
     assert_eq!(STARTUP_DEADLINE, Duration::from_secs(45));
+    assert_eq!(RETRY_BACKOFF, Duration::from_secs(30));
     let cfg = RunnerConfig::production(3000, Vec::new());
     assert_eq!(cfg.startup_deadline, Duration::from_secs(45));
+    assert_eq!(cfg.retry_backoff, Duration::from_secs(30));
 }
 
 #[test]
-fn child_exit_before_deadline_is_preserved() {
+fn clean_child_exit_reconnects_after_backoff() {
+    let harness = Harness::new();
+    let mut cfg = harness.cfg("ok", "no");
+    let stop = Arc::new(AtomicI32::new(0));
+    cfg.stop = Arc::clone(&stop);
+    let started = Instant::now();
+    let handle = thread::spawn(move || runner::run(&cfg));
+
+    harness.wait_spawn_count(2);
+    assert!(started.elapsed() >= Duration::from_millis(30));
+    stop.store(15, Ordering::SeqCst);
+
+    assert_eq!(handle.join().unwrap(), 143);
+}
+
+#[test]
+fn nonzero_child_exit_reconnects_after_backoff() {
     let harness = Harness::new();
     fs::write(harness.dir.0.join("code"), "7\n").unwrap();
-    let cfg = harness.cfg("exit", "no");
-    let code = runner::run(&cfg);
-    assert_eq!(code, 7);
-    assert_eq!(harness.spawn_count(), 1);
+    let mut cfg = harness.cfg("exit", "no");
+    let stop = Arc::new(AtomicI32::new(0));
+    cfg.stop = Arc::clone(&stop);
+    let handle = thread::spawn(move || runner::run(&cfg));
+
+    harness.wait_spawn_count(2);
+    stop.store(2, Ordering::SeqCst);
+
+    assert_eq!(handle.join().unwrap(), 130);
 }
 
 #[test]
-fn hang_past_deadline_without_owned_listener_kills_only_the_child() {
+fn startup_listener_failure_reaps_child_then_reconnects() {
     let harness = Harness::new();
     let mut cfg = harness.cfg("hang", "no");
     cfg.startup_deadline = Duration::from_millis(80);
-    let start = Instant::now();
-    let code = runner::run(&cfg);
-    assert!(start.elapsed() < Duration::from_secs(2));
-    assert_eq!(code, 1);
-    let pid = harness.child_pid().expect("child pid");
-    assert!(
-        !pid_alive(pid),
-        "owned ssh child leaked after startup failure"
-    );
-    assert_eq!(harness.spawn_count(), 1);
+    let stop = Arc::new(AtomicI32::new(0));
+    cfg.stop = Arc::clone(&stop);
+    let handle = thread::spawn(move || runner::run(&cfg));
+    let first_pid = harness.wait_child_pid();
+
+    harness.wait_spawn_count(2);
+    assert!(!pid_alive(first_pid), "failed startup child was not reaped");
+    stop.store(15, Ordering::SeqCst);
+
+    assert_eq!(handle.join().unwrap(), 143);
 }
 
 #[test]
-fn healthy_listener_is_not_a_lifetime_cap() {
+fn transient_spawn_failure_reconnects() {
     let harness = Harness::new();
-    let mut cfg = harness.cfg("slow", "yes");
-    cfg.startup_deadline = Duration::from_millis(80);
-    let start = Instant::now();
-    let code = runner::run(&cfg);
-    assert_eq!(code, 1);
-    assert!(start.elapsed() >= Duration::from_millis(150));
-    assert_eq!(harness.spawn_count(), 1);
+    let saved_ssh = harness.dir.0.join("ssh.saved");
+    fs::rename(&harness.ssh, &saved_ssh).unwrap();
+    let mut cfg = harness.cfg("hang", "yes");
+    let stop = Arc::new(AtomicI32::new(0));
+    cfg.stop = Arc::clone(&stop);
+    let handle = thread::spawn(move || runner::run(&cfg));
+
+    thread::sleep(Duration::from_millis(80));
+    assert_eq!(harness.spawn_count(), 0);
+    fs::rename(saved_ssh, &harness.ssh).unwrap();
+    let pid = harness.wait_child_pid();
+    stop.store(15, Ordering::SeqCst);
+
+    assert_eq!(handle.join().unwrap(), 143);
+    assert!(!pid_alive(pid));
 }
 
 #[test]
-fn wrong_process_owning_the_port_fails_startup() {
+fn stop_during_backoff_is_prompt_and_does_not_reconnect() {
     let harness = Harness::new();
-    let mut cfg = harness.cfg("hang", "no");
-    cfg.startup_deadline = Duration::from_millis(80);
-    let code = runner::run(&cfg);
-    assert_eq!(code, 1);
+    let mut cfg = harness.cfg("ok", "no");
+    cfg.retry_backoff = Duration::from_secs(2);
+    let stop = Arc::new(AtomicI32::new(0));
+    cfg.stop = Arc::clone(&stop);
+    let handle = thread::spawn(move || runner::run(&cfg));
+    harness.wait_spawn_count(1);
+    thread::sleep(Duration::from_millis(50));
+
+    let stopped = Instant::now();
+    stop.store(2, Ordering::SeqCst);
+    assert_eq!(handle.join().unwrap(), 130);
+    assert!(stopped.elapsed() < Duration::from_millis(500));
+    assert_eq!(harness.spawn_count(), 1);
 }
 
 #[test]
@@ -338,30 +391,43 @@ fn stop_after_healthy_listener_reaps_owned_child() {
 }
 
 #[test]
+fn healthy_listener_is_not_a_lifetime_cap() {
+    let harness = Harness::new();
+    let mut cfg = harness.cfg("hang", "yes");
+    cfg.startup_deadline = Duration::from_millis(80);
+    let stop = Arc::new(AtomicI32::new(0));
+    cfg.stop = Arc::clone(&stop);
+    let handle = thread::spawn(move || runner::run(&cfg));
+    let pid = harness.wait_child_pid();
+    thread::sleep(Duration::from_millis(180));
+    assert_eq!(harness.spawn_count(), 1);
+    stop.store(15, Ordering::SeqCst);
+    assert_eq!(handle.join().unwrap(), 143);
+    assert!(!pid_alive(pid));
+}
+
+#[test]
 fn argument_policy_is_passed_through_unchanged() {
     let harness = Harness::new();
-    let cfg = harness.cfg("ok", "no");
-    let code = runner::run(&cfg);
-    assert_eq!(code, 1);
+    let mut cfg = harness.cfg("hang", "yes");
+    let stop = Arc::new(AtomicI32::new(0));
+    cfg.stop = Arc::clone(&stop);
+    let handle = thread::spawn(move || runner::run(&cfg));
+    let pid = harness.wait_child_pid();
     let logged = fs::read_to_string(&harness.args_file).unwrap();
     let got: Vec<&str> = logged.lines().collect();
     assert_eq!(got, production_ssh_args());
+    stop.store(15, Ordering::SeqCst);
+    assert_eq!(handle.join().unwrap(), 143);
+    assert!(!pid_alive(pid));
 }
 
 #[test]
-fn runner_does_not_reconnect_after_child_exit() {
-    let harness = Harness::new();
-    fs::write(harness.dir.0.join("code"), "1\n").unwrap();
-    let cfg = harness.cfg("exit", "yes");
-    let code = runner::run(&cfg);
-    assert_eq!(code, 1);
-    assert_eq!(harness.spawn_count(), 1);
-}
-
-#[test]
-fn transport_failure_after_startup_makes_runner_fail() {
+fn transport_failure_after_startup_reconnects() {
     let harness = Harness::new();
     let mut cfg = harness.cfg("transport", "yes");
+    let stop = Arc::new(AtomicI32::new(0));
+    cfg.stop = Arc::clone(&stop);
     cfg.startup_deadline = Duration::from_millis(80);
     let handle = thread::spawn(move || runner::run(&cfg));
     let pid = harness.wait_child_pid();
@@ -369,14 +435,15 @@ fn transport_failure_after_startup_makes_runner_fail() {
     thread::sleep(Duration::from_millis(120));
 
     // OpenSSH can handle SIGTERM and report a successful child status. The
-    // runner must still fail so launchd treats the transport loss as restartable.
+    // runner must still replace it after the retry backoff.
     unsafe {
         let _ = kill(pid as i32, 15);
     }
 
-    assert_eq!(handle.join().unwrap(), 1);
+    harness.wait_spawn_count(2);
     assert!(!pid_alive(pid));
-    assert_eq!(harness.spawn_count(), 1);
+    stop.store(15, Ordering::SeqCst);
+    assert_eq!(handle.join().unwrap(), 143);
 }
 
 #[test]
@@ -410,10 +477,11 @@ fn stop_during_startup_probe_preserves_signal_exit() {
     let pid = harness.wait_child_pid();
     harness.wait_probe_ready();
 
+    let stopped = Instant::now();
     stop.store(2, Ordering::SeqCst);
-    fs::write(&harness.probe_release_file, "release\n").unwrap();
 
     assert_eq!(handle.join().unwrap(), 130);
+    assert!(stopped.elapsed() < Duration::from_millis(500));
     assert!(!pid_alive(pid));
 }
 
@@ -427,12 +495,14 @@ fn child_exit_near_deadline_does_not_target_a_reused_pid() {
         fs::write(&harness.listen_file, "no\n").unwrap();
         let mut cfg = harness.cfg("near", "no");
         cfg.startup_deadline = Duration::from_secs(1);
-        let code = runner::run(&cfg);
-        assert!(code == 0 || code == 1, "unexpected runner exit {code}");
-        if let Some(pid) = harness.child_pid() {
-            assert!(!pid_alive(pid), "runner left a child alive after returning");
-        }
-        assert_eq!(harness.spawn_count(), 1);
+        let stop = Arc::new(AtomicI32::new(0));
+        cfg.stop = Arc::clone(&stop);
+        let handle = thread::spawn(move || runner::run(&cfg));
+        let first_pid = harness.wait_child_pid();
+        harness.wait_spawn_count(2);
+        assert!(!pid_alive(first_pid));
+        stop.store(15, Ordering::SeqCst);
+        assert_eq!(handle.join().unwrap(), 143);
     }
 }
 

@@ -149,6 +149,21 @@ declares `launchd.agents."fleet-tunnel-PORT"` with Label
 `org.nix-community.home.fleet-tunnel-PORT`. Linux configs do not install
 those jobs.
 
+Each tunnel agent starts at load and uses
+`KeepAlive.SuccessfulExit = false`. This is a crash fallback for the runner;
+the primary transport recovery mechanism is inside `fleet-tunnel-runner`.
+After an unexpected SSH exit, SSH spawn failure, or failed startup-listener
+check, the runner reaps its owned child, waits 30 seconds, and tries again. The
+wait is interruptible, and a healthy SSH child has no lifetime limit. The
+30-second runner delay and launchd `ThrottleInterval` intentionally match.
+
+`fleet tunnel pause PORT` disables and boots out the job, terminating the
+long-lived runner and preventing its internal retry loop from continuing.
+`fleet tunnel resume PORT` re-enables it before bootstrap or kickstart. The
+launchd fallback remains useful if the runner itself crashes, but a domain-wide
+on-demand-only state can defer that fallback; the plist policy cannot override
+domain scheduling.
+
 After a package transition changes a job's `ProgramArguments`, launchd may
 leave the replacement job loaded but stopped or uninitialized. Inspect
 `launchctl print gui/$UID/org.nix-community.home.fleet-tunnel-PORT` and verify

@@ -201,6 +201,7 @@
       darwinToml = darwinConfig.xdg.configFile."fleet/config.toml".text;
       agent3000 = darwinConfig.launchd.agents."fleet-tunnel-3000";
       agent5173 = darwinConfig.launchd.agents."fleet-tunnel-5173";
+      agent3000Plist = lib.generators.toPlist {escape = true;} agent3000.config;
       failSchema =
         builtins.tryEval
         (evalFleetHome {
@@ -279,7 +280,10 @@
       assert agent3000.enable;
       assert agent3000.config.Label == "org.nix-community.home.fleet-tunnel-3000";
       assert agent3000.config.RunAtLoad == true;
-      assert agent3000.config.KeepAlive == true;
+      assert lib.filterAttrs (_: value: value != null) agent3000.config.KeepAlive == {SuccessfulExit = false;};
+      assert lib.hasInfix "<key>KeepAlive</key>" agent3000Plist;
+      assert lib.hasInfix "<key>SuccessfulExit</key>" agent3000Plist;
+      assert lib.hasInfix "<false/>" agent3000Plist;
       assert agent3000.config.ThrottleInterval == 30;
       assert agent3000.config.ProcessType == "Background";
       assert agent3000.config.StandardOutPath == null;
@@ -288,6 +292,7 @@
       assert lib.drop 1 agent3000.config.ProgramArguments
       == runnerTail 3000 "localhost" 3000 "fleet-forward-workbox";
       assert agent5173.config.Label == "org.nix-community.home.fleet-tunnel-5173";
+      assert lib.filterAttrs (_: value: value != null) agent5173.config.KeepAlive == {SuccessfulExit = false;};
       assert lib.hasSuffix "/bin/fleet-tunnel-runner" (lib.head agent5173.config.ProgramArguments);
       assert lib.drop 1 agent5173.config.ProgramArguments
       == runnerTail 5173 "localhost" 5173 "fleet-forward-dev";

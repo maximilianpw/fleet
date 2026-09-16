@@ -14,8 +14,10 @@ does not inherit live Joyce/Kim acceptance from Plan 001.
   different signal semantics.
 - No agent forwarding. Managed loopback binds. No multiplexing on managed and
   attachment-scoped forwards.
-- launchd pause persistence, unrelated-listener protection, 45s startup
-  deadline, and doctor distinctions.
+- launchd pause persistence, unrelated-listener protection, the 45-second
+  startup deadline, and doctor distinctions.
+- Runner SIGINT/SIGTERM status 130/143 and owned-child cleanup. Intentional
+  pause disables and boots out the launchd job.
 - `run`: local command uses argv; remote command follows OpenSSH remote-shell
   joining. Spaces, quoting, and a fish remote login shell are part of the
   contract. There is no silent argv-safe remote mode in v1.
@@ -30,6 +32,21 @@ does not inherit live Joyce/Kim acceptance from Plan 001.
   doctor, t3, and copy still require declared metadata.
 - Managed job labels stay `org.nix-community.home.fleet-tunnel-PORT`. Pause
   intent lives in launchd against those labels. Renaming them is a migration.
+
+## Post-baseline tunnel recovery
+
+Internal reconnect is an intentional Rust reliability change, not preserved
+Bash behavior. Live Joyce acceptance showed that launchd could leave a failed
+runner stopped in GUI-domain `on-demand-only` mode. The Rust runner therefore
+owns transport recovery. It keeps at most one SSH child and retries unexpected
+clean exits, nonzero exits, spawn failures, and failed startup-listener checks
+after 30 seconds. The backoff is interruptible, and a healthy child has no
+lifetime cap.
+
+`KeepAlive.SuccessfulExit = false` is a fallback if the runner itself crashes.
+It is not the transport reconnect mechanism because launchd domain policy can
+defer it. Pause still disables and boots out the job, which removes the runner
+and prevents its internal loop from reconnecting.
 
 ## Permitted v1 additions
 

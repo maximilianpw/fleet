@@ -336,7 +336,7 @@
           Label = mapping.label;
           ProgramArguments = tunnelArgs mapping;
           RunAtLoad = true;
-          KeepAlive = true;
+          KeepAlive.SuccessfulExit = false;
           ThrottleInterval = 30;
           ProcessType = "Background";
         };

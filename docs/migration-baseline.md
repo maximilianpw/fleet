@@ -3,6 +3,22 @@
 Recorded while packaging the standalone repo from the source nix-config checkout.
 No license was assigned. The owner chose not to add a LICENSE file.
 
+## Post-baseline tunnel recovery
+
+On 2026-09-16, live Joyce acceptance showed that its GUI launchd domain could
+leave a failed tunnel job stopped in `on-demand-only` mode even when the job's
+keepalive policy requested another launch. The standalone Rust runner therefore
+owns transport recovery: it keeps at most one SSH child, validates listener
+ownership after the existing 45-second startup deadline, and retries child,
+spawn, or listener-startup failures after an interruptible 30-second backoff.
+SIGINT/SIGTERM still kill and reap the owned child and return 130/143; pause's
+existing disable-plus-bootout sequence removes the runner and suppresses retry.
+
+The generated launchd job uses `KeepAlive.SuccessfulExit = false` as a fallback
+for runner crashes. It is not relied on for SSH transport recovery. These are
+post-extraction reliability changes and do not alter the historical source
+hashes below.
+
 ## Source revision
 
 | Item | Value |
