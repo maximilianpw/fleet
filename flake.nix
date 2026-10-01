@@ -240,6 +240,22 @@
             };
           homeDirectory = "/home/developer";
         });
+      failOptionLikeTmuxCommand =
+        builtins.tryEval
+        (evalFleetHome {
+          inherit pkgs;
+          package = placeholder;
+          settings =
+            linuxSettings
+            // {
+              hosts =
+                linuxSettings.hosts
+                // {
+                  workbox = workboxHost // {tmux_command = "-tmux";};
+                };
+            };
+          homeDirectory = "/home/developer";
+        }).xdg.configFile."fleet/config.toml".text;
       failDuplicatePort =
         builtins.tryEval
         (evalFleetHome {
@@ -300,6 +316,7 @@
       assert !failUnknown.success;
       assert !failLocalMapping.success;
       assert !failDuplicatePort.success;
+      assert !failOptionLikeTmuxCommand.success;
         pkgs.runCommand "home-manager" {
           nativeBuildInputs = [fleet];
           inherit linuxToml darwinToml;

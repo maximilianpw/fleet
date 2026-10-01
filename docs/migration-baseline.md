@@ -87,8 +87,9 @@ follows that pin):
 | nixpkgs (nixos-26.05) | `21a67dc470149f337cecafbe965d8d252a390518` | `sha256-ugpsyk3NM2s87vXfUiIIiibbJ4Pp0JPS5p/3mfs+q+c=` |
 | home-manager (release-26.05) | `b1d1b60084970f9d1e2b72662639dab6d039be71` | `sha256-9nt4W0HNNP84B+b37yRs9Zxat1ZR5guJxEZDEjAgex4=` |
 
-That nixpkgs `rustc` is 1.95.0. The Nix package uses that `rustPlatform`. The
-newer compiler on Kim must not become the MSRV by accident.
+That nixpkgs `rustc` is 1.95.0. The Nix package uses that `rustPlatform`. A
+newer ambient compiler on a developer machine must not become the MSRV by
+accident.
 
 ## Still in nix-config until a later gate
 

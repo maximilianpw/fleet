@@ -27,7 +27,7 @@ Licensing stays unset. There is no LICENSE file.
 
 ## Commands
 
-From the repo root, with `Cargo.lock` present. Done means exit 0.
+From the repo root. Done means exit 0.
 
 ```sh
 cargo fmt --all --check
@@ -51,9 +51,8 @@ uses nixpkgs `rustPlatform` from rev `21a67dc470149f337cecafbe965d8d252a390518`.
 exit 2 invalid, no SSH or supervisor spawn. Help, version, and completions
 succeed with an empty HOME.
 
-Generate `Cargo.lock` before any `--locked` command. Keep source control
-local until a commit is requested. Host activation, live launchctl, and
-publishing are separate approvals.
+Keep source control local until a commit is requested. Host activation, live
+launchctl, and publishing are separate approvals.
 
 ## Layout
 

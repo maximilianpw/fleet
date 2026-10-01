@@ -11,6 +11,11 @@
   sshTargetPattern = "[^-[:cntrl:]][^[:cntrl:]]*";
   remoteHostPattern = "[A-Za-z0-9._-]+";
   labelPattern = "[A-Za-z0-9][A-Za-z0-9._-]*";
+  # Mirror the runtime validators in src/config.rs so bad values fail at
+  # evaluation instead of at the first fleet command.
+  tmuxCommandPattern = "[A-Za-z0-9_./][A-Za-z0-9_./-]*";
+  tmuxSessionPattern = "[A-Za-z0-9_.-]+";
+  textType = types.strMatching "[^[:cntrl:]]*";
   portType = types.ints.between 1 65535;
 
   escapeTOMLString = value:
@@ -122,7 +127,7 @@
         description = "OpenSSH destination or alias. Display-only user metadata is not interpolated here.";
       };
       display_target = mkOption {
-        type = types.nullOr types.str;
+        type = types.nullOr textType;
         default = null;
         description = "Inventory hostname shown by list. Defaults at runtime to ssh_target.";
       };
@@ -141,15 +146,15 @@
         description = "Alternate names for this host. Must be unique across the hosts table.";
       };
       os = mkOption {
-        type = types.str;
+        type = textType;
         description = "Free-form OS metadata. Unknown strings are allowed.";
       };
       role = mkOption {
-        type = types.str;
+        type = textType;
         description = "Free-form role shown by list.";
       };
       user = mkOption {
-        type = types.str;
+        type = textType;
         description = "Display metadata for the remote account. Not an SSH user override.";
       };
       client_enrolled = mkOption {
@@ -165,12 +170,12 @@
         description = "Whether unattended or long-running agent work should run here.";
       };
       tmux_command = mkOption {
-        type = types.nullOr types.str;
+        type = types.nullOr (types.strMatching tmuxCommandPattern);
         default = null;
         description = "Remote tmux executable. Defaults at runtime to tmux.";
       };
       tmux_session = mkOption {
-        type = types.nullOr types.str;
+        type = types.nullOr (types.strMatching tmuxSessionPattern);
         default = null;
         description = "Default remote tmux session. Defaults at runtime to main.";
       };

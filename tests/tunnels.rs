@@ -13,6 +13,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use fleet::config::Supervisor;
 use fleet::doctor::{
     self, classify_ssh_stderr, remote_listen_command, DoctorDeadlines, DoctorError, DoctorHost,
     SshOutcome, SshProbe, SshRequest, SshState, SystemSsh,
@@ -23,9 +24,8 @@ use fleet::launchd::{
 };
 use fleet::tunnels::{
     self, classify_local_listen, managed_delete_verdict, ListenError, ListenProbe,
-    ListenerOwnership, ManagedDeleteVerdict, Mapping, ProcessIdentity, Supervisor, TunnelContext,
-    TunnelError, LAUNCHCTL_REQUIRED_MESSAGE, MACOS_ONLY_MESSAGE, NO_SUPERVISOR_MESSAGE,
-    NO_TUNNELS_CONFIGURED,
+    ListenerOwnership, ManagedDeleteVerdict, Mapping, ProcessIdentity, TunnelContext, TunnelError,
+    LAUNCHCTL_REQUIRED_MESSAGE, MACOS_ONLY_MESSAGE, NO_SUPERVISOR_MESSAGE, NO_TUNNELS_CONFIGURED,
 };
 
 const UID: u32 = 501;
@@ -483,6 +483,37 @@ fn status_with_no_mappings() {
     let text = status_text(&ctx, &FakeLaunchd::new(), &FakeListen::default());
     assert!(text.contains("LOCAL"));
     assert!(text.contains(NO_TUNNELS_CONFIGURED));
+}
+
+/// Writer whose every write fails like a closed pipe.
+struct ClosedPipe;
+
+impl io::Write for ClosedPipe {
+    fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+        Err(io::Error::from(io::ErrorKind::BrokenPipe))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn status_write_failure_is_an_output_error() {
+    let home = scratch();
+    let maps = mappings();
+    let ctx = ctx(&home.0, &maps, Supervisor::None);
+    let error = tunnels::print_status(
+        &mut ClosedPipe,
+        &ctx,
+        &FakeLaunchd::new(),
+        &FakeListen::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(error, TunnelError::Output(_)), "{error:?}");
+    assert!(error
+        .to_string()
+        .starts_with("fleet: failed to write output"));
 }
 
 #[test]

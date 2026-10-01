@@ -3,7 +3,8 @@
 //! The `fleet` binary loads TOML, validates it, and execs OpenSSH or tmux.
 //! Tunnel supervision, doctor, and the runner live in sibling modules.
 
-use std::io;
+use std::io::{self, Write};
+use std::str::FromStr;
 
 pub mod config;
 pub mod copy;
@@ -24,11 +25,11 @@ pub use copy::{plan_copy, CopyError};
 pub use forwards::{
     collect_forward_rows, ensure_ports_free, forward_local_port, parse_forward_pids,
     render_forward_list, stop_forwards, ConservativeManagedInspector, ForwardError, ForwardRow,
-    ManagedClass, ManagedForwardInspector, SnapshotInspector,
+    ManagedClass, ManagedForwardInspector,
 };
 pub use process::{
     exec_replace, parse_ps_output, PathKill, PathPsTable, PlannedCommand, ProcessEnv, ProcessError,
-    ProcessTable, RecordingSignals, SignalSender, SnapshotProcesses,
+    ProcessTable, SignalSender,
 };
 pub use ssh::{
     local_ports_of, parse_ssh_tail, plan_ad_hoc_forward, plan_run, plan_shell, plan_ssh, plan_t3,
@@ -94,6 +95,8 @@ pub enum FleetError {
     Doctor(#[from] doctor::DoctorError),
     #[error("{0}")]
     Usage(String),
+    #[error("fleet: failed to write output: {0}")]
+    Output(#[from] io::Error),
 }
 
 impl FleetError {
@@ -113,7 +116,31 @@ impl FleetError {
             Self::Tunnel(error) => error.exit_code(),
             Self::Doctor(error) => error.exit_code(),
             Self::Usage(_) => 2,
+            Self::Output(_) => 1,
         }
+    }
+}
+
+/// Write command output without panicking when stdout is closed.
+pub fn write_stdout(output: impl AsRef<[u8]>) -> Result<(), FleetError> {
+    let mut out = io::stdout().lock();
+    out.write_all(output.as_ref())?;
+    out.flush()?;
+    Ok(())
+}
+
+/// True for a non-empty run of ASCII digits. Rejects signs and whitespace
+/// that `str::parse` would otherwise accept or report differently.
+pub(crate) fn is_decimal(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Parse an unsigned decimal token; `None` for non-digits or overflow.
+pub(crate) fn parse_decimal<T: FromStr>(text: &str) -> Option<T> {
+    if is_decimal(text) {
+        text.parse().ok()
+    } else {
+        None
     }
 }
 
@@ -124,44 +151,27 @@ pub enum TunnelCommand {
     Resume { port: u16 },
 }
 
+/// Runtime mappings with hosts as written in the config. `tunnel status`
+/// displays these names.
 pub fn mappings_from_config(config: &FleetConfig) -> Vec<tunnels::Mapping> {
     config
         .tunnels
         .mappings
         .iter()
-        .map(|mapping| tunnels::Mapping {
-            local_port: mapping.local_port.get(),
-            host: mapping.host.clone(),
-            remote_port: mapping.remote_port.get(),
-            remote_host: mapping.remote_host.clone(),
-            label: mapping.label.clone(),
-        })
+        .map(tunnels::Mapping::from)
         .collect()
 }
 
+/// Runtime mappings with alias hosts replaced by their canonical name, so
+/// `doctor HOST` finds every mapping that targets HOST.
 pub fn doctor_mappings_from_config(config: &FleetConfig) -> Vec<tunnels::Mapping> {
-    config
-        .tunnels
-        .mappings
-        .iter()
-        .map(|mapping| tunnels::Mapping {
-            local_port: mapping.local_port.get(),
-            host: config
-                .resolve(&mapping.host)
-                .map(|resolved| resolved.canonical)
-                .unwrap_or_else(|| mapping.host.clone()),
-            remote_port: mapping.remote_port.get(),
-            remote_host: mapping.remote_host.clone(),
-            label: mapping.label.clone(),
-        })
-        .collect()
-}
-
-pub fn supervisor_from_config(config: &FleetConfig) -> tunnels::Supervisor {
-    match config.tunnels.supervisor {
-        Supervisor::None => tunnels::Supervisor::None,
-        Supervisor::Launchd => tunnels::Supervisor::Launchd,
+    let mut mappings = mappings_from_config(config);
+    for mapping in &mut mappings {
+        if let Some(resolved) = config.resolve(&mapping.host) {
+            mapping.host = resolved.canonical;
+        }
     }
+    mappings
 }
 
 fn tunnel_context<'a>(
@@ -171,7 +181,7 @@ fn tunnel_context<'a>(
 ) -> Result<tunnels::TunnelContext<'a>, FleetError> {
     let home = env.home.as_deref().ok_or(ConfigError::HomeNotSet)?;
     Ok(tunnels::TunnelContext {
-        supervisor: supervisor_from_config(config),
+        supervisor: config.tunnels.supervisor,
         mappings,
         home,
         uid: launchd::current_uid(),
@@ -190,18 +200,14 @@ pub fn run_tunnel_command(
     let listen = tunnels::SystemListenProbe::new();
     match command {
         TunnelCommand::Status => {
-            tunnels::print_status(&mut io::stdout(), &ctx, &launchd, &listen)?;
+            tunnels::print_status(&mut io::stdout().lock(), &ctx, &launchd, &listen)?;
+            Ok(())
         }
-        TunnelCommand::Pause { port } => {
-            let message = tunnels::pause(port, &ctx, &launchd)?;
-            print!("{message}");
-        }
+        TunnelCommand::Pause { port } => write_stdout(tunnels::pause(port, &ctx, &launchd)?),
         TunnelCommand::Resume { port } => {
-            let message = tunnels::resume(port, &ctx, &launchd, &listen)?;
-            print!("{message}");
+            write_stdout(tunnels::resume(port, &ctx, &launchd, &listen)?)
         }
     }
-    Ok(())
 }
 
 /// Public CLI hook for `fleet doctor HOST`.
@@ -234,13 +240,9 @@ pub fn run_doctor_command(
     Ok(())
 }
 
-/// Conservative inspector that does not talk to launchd. Tests use this when
-/// they want mapping-port policy without a job snapshot.
-pub fn managed_inspector_for(config: &FleetConfig) -> ConservativeManagedInspector {
-    ConservativeManagedInspector::from_config(config)
-}
-
 /// Classify a forward PID using launchd job/child identity when configured.
+/// Without a tunnel context (HOME unset), fall back to the conservative
+/// mapped-port policy.
 pub fn classify_managed_delete(
     config: &FleetConfig,
     env: &ProcessEnv,
@@ -249,13 +251,7 @@ pub fn classify_managed_delete(
 ) -> ManagedClass {
     let mappings = mappings_from_config(config);
     let Ok(ctx) = tunnel_context(config, env, &mappings) else {
-        return if config.tunnels.supervisor == Supervisor::Launchd
-            && config.mapped_local_ports().contains(&local_port)
-        {
-            ManagedClass::Ambiguous
-        } else {
-            ManagedClass::Unmanaged
-        };
+        return ConservativeManagedInspector::from_config(config).classify(pid, local_port);
     };
     match tunnels::managed_delete_verdict(
         pid,

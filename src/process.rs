@@ -1,17 +1,27 @@
-//! Process lookup, argv planning, and Unix exec replacement.
+//! Process lookup, argv planning, Unix exec replacement, and bounded
+//! subprocess runs.
 //!
 //! Production selects `ssh`, `tmux`, `ps`, and `kill` from PATH. Tests inject
 //! fake executables by putting them first on PATH. Fleet itself does not read
 //! fixture-only environment switches to choose those programs.
 
-use std::ffi::OsString;
-use std::io;
+use std::ffi::{OsStr, OsString};
+use std::io::{self, Read};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::process::CommandExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use thiserror::Error;
+
+const SIGTERM: i32 = 15;
+const TIMEOUT_EXIT: i32 = 124;
+
+extern "C" {
+    fn kill(pid: i32, sig: i32) -> i32;
+}
 
 /// Environment values Fleet reads. Tests construct this directly; the CLI
 /// fills it from the real process environment.
@@ -114,18 +124,6 @@ impl ProcessTable for PathPsTable<'_> {
     }
 }
 
-/// Fixed process snapshot for tests. `list` always returns a clone of `rows`.
-#[derive(Debug, Clone, Default)]
-pub struct SnapshotProcesses {
-    pub rows: Vec<ObservedProcess>,
-}
-
-impl ProcessTable for SnapshotProcesses {
-    fn list(&self) -> Result<Vec<ObservedProcess>, ProcessError> {
-        Ok(self.rows.clone())
-    }
-}
-
 pub trait SignalSender {
     fn signal(&self, pid: u32) -> Result<(), ProcessError>;
 }
@@ -154,19 +152,6 @@ impl SignalSender for PathKill<'_> {
                 source,
             }),
         }
-    }
-}
-
-/// Records signaled PIDs instead of sending a real signal.
-#[derive(Debug, Default)]
-pub struct RecordingSignals {
-    pub pids: std::sync::Mutex<Vec<u32>>,
-}
-
-impl SignalSender for RecordingSignals {
-    fn signal(&self, pid: u32) -> Result<(), ProcessError> {
-        self.pids.lock().expect("signal log mutex").push(pid);
-        Ok(())
     }
 }
 
@@ -258,10 +243,125 @@ fn apply_path(cmd: &mut Command, env: &ProcessEnv) {
     }
 }
 
-/// True when `path` is an executable regular file. Used by tests.
-pub fn is_executable(path: &Path) -> bool {
-    let Ok(meta) = path.metadata() else {
+#[derive(Debug)]
+pub struct BoundedOutput {
+    pub timed_out: bool,
+    pub code: i32,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+/// GNU `timeout --kill-after` analogue: SIGTERM at `timeout`, SIGKILL after
+/// `kill_after`. Timed-out commands report exit 124. Used by doctor SSH,
+/// listener `lsof`, and the runner's startup probe.
+pub(crate) fn run_with_deadline(
+    cmd: &mut Command,
+    timeout: Duration,
+    kill_after: Duration,
+    poll: Duration,
+) -> io::Result<BoundedOutput> {
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    let mut child = cmd.spawn()?;
+    let stdout = drain(child.stdout.take(), "stdout")?;
+    let stderr = drain(child.stderr.take(), "stderr")?;
+
+    let deadline = Instant::now() + timeout;
+    let poll = poll.max(Duration::from_millis(1));
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(BoundedOutput {
+                timed_out: false,
+                code: exit_status_code(status),
+                stdout: stdout.join().unwrap_or_default(),
+                stderr: stderr.join().unwrap_or_default(),
+            });
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        thread::sleep(poll.min(deadline.saturating_duration_since(Instant::now())));
+    }
+
+    send_signal(child.id(), SIGTERM);
+    let kill_at = Instant::now() + kill_after;
+    let mut exit_note = None;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            exit_note = Some(format!("timed out; child exited {status}"));
+            break;
+        }
+        if Instant::now() >= kill_at {
+            let _ = child.kill();
+            let _ = child.wait();
+            break;
+        }
+        thread::sleep(poll);
+    }
+
+    let stdout = stdout.join().unwrap_or_default();
+    let mut stderr = stderr.join().unwrap_or_default();
+    if stderr.is_empty() {
+        if let Some(note) = exit_note {
+            stderr = note.into_bytes();
+        }
+    }
+    Ok(BoundedOutput {
+        timed_out: true,
+        code: TIMEOUT_EXIT,
+        stdout,
+        stderr,
+    })
+}
+
+fn drain(
+    pipe: Option<impl Read + Send + 'static>,
+    name: &str,
+) -> io::Result<thread::JoinHandle<Vec<u8>>> {
+    let mut pipe = pipe.ok_or_else(|| io::Error::other(format!("missing {name} pipe")))?;
+    Ok(thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = pipe.read_to_end(&mut buf);
+        buf
+    }))
+}
+
+/// Signal one positive PID. PIDs that do not fit a positive `pid_t` are
+/// ignored: `kill` treats zero and negative values as process groups.
+pub(crate) fn send_signal(pid: u32, sig: i32) {
+    let Ok(pid) = i32::try_from(pid) else {
+        return;
+    };
+    if pid <= 0 {
+        return;
+    }
+    // SAFETY: kill has no memory-safety preconditions; ESRCH is ignored.
+    unsafe {
+        let _ = kill(pid, sig);
+    }
+}
+
+pub(crate) fn exit_status_code(status: ExitStatus) -> i32 {
+    status
+        .code()
+        .or_else(|| status.signal().map(|sig| 128 + sig))
+        .unwrap_or(1)
+}
+
+/// True when `program` resolves to an executable file, directly or on PATH.
+pub(crate) fn program_is_runnable(program: &OsStr) -> bool {
+    let path = Path::new(program);
+    if path.components().count() > 1 || path.is_absolute() {
+        return is_executable_file(path);
+    }
+    let Some(paths) = std::env::var_os("PATH") else {
         return false;
     };
-    meta.is_file() && meta.permissions().mode() & 0o111 != 0
+    std::env::split_paths(&paths).any(|dir| is_executable_file(&dir.join(path)))
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    path.metadata()
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
 }

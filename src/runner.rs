@@ -12,7 +12,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::launchd::{exit_status_code, send_signal};
+use crate::parse_decimal;
+use crate::process::{exit_status_code, send_signal};
 
 pub const STARTUP_DEADLINE: Duration = Duration::from_secs(45);
 pub const LISTENER_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
@@ -22,7 +23,6 @@ pub const RETRY_BACKOFF: Duration = Duration::from_secs(30);
 
 const SIGINT: i32 = 2;
 const SIGTERM: i32 = 15;
-const SIGKILL: i32 = 9;
 
 extern "C" {
     fn signal(sig: i32, handler: extern "C" fn(i32)) -> usize;
@@ -89,16 +89,7 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<RunnerConf
 }
 
 fn parse_port(arg: &OsString) -> Option<u16> {
-    let text = arg.to_str()?;
-    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let port: u32 = text.parse().ok()?;
-    if (1..=65535).contains(&port) {
-        u16::try_from(port).ok()
-    } else {
-        None
-    }
+    parse_decimal(arg.to_str()?).filter(|&port: &u16| port != 0)
 }
 
 /// Process-wide INT/TERM handlers. They only store a signal number; [`run`]
@@ -254,8 +245,8 @@ fn stop_signal(cfg: &RunnerConfig) -> i32 {
     }
 }
 
+/// SIGKILL and reap the owned child. `Child::kill` targets only this child.
 fn kill_owned(child: &mut std::process::Child) {
-    send_signal(child.id(), SIGKILL);
     let _ = child.kill();
     let _ = child.wait();
 }

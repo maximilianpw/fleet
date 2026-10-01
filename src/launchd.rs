@@ -1,4 +1,4 @@
-//! launchd job identifiers, `launchctl` parsing, and local subprocess deadlines.
+//! launchd job identifiers and `launchctl` parsing.
 //!
 //! Pause intent is a persistent launchd override against the existing job
 //! label `org.nix-community.home.fleet-tunnel-PORT`. Do not rename labels:
@@ -9,23 +9,19 @@
 //! OS snapshot.
 
 use std::collections::HashSet;
-use std::ffi::{OsStr, OsString};
-use std::io::{self, Read};
+use std::ffi::OsString;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::process::Command;
+
+use crate::parse_decimal;
+use crate::process::{exit_status_code, program_is_runnable};
 
 /// Label prefix used by Home Manager for managed Fleet tunnel jobs.
 pub const FLEET_TUNNEL_LABEL_PREFIX: &str = "org.nix-community.home.fleet-tunnel-";
 
-const SIGTERM: i32 = 15;
-const SIGKILL: i32 = 9;
-const TIMEOUT_EXIT: i32 = 124;
-
 extern "C" {
     fn getuid() -> u32;
-    fn kill(pid: i32, sig: i32) -> i32;
 }
 
 /// Current process uid, used to build `gui/UID` launchd domains.
@@ -230,8 +226,8 @@ pub fn parse_launchctl_print(output: &str) -> PrintFields {
             "state" if value == "running" => {
                 running = true;
             }
-            "pid" if !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()) => {
-                if let Ok(parsed) = value.parse::<u32>() {
+            "pid" => {
+                if let Some(parsed) = parse_decimal(value) {
                     pid = Some(parsed);
                 }
             }
@@ -345,154 +341,4 @@ pub fn job_is_loaded(backend: &impl Launchctl, target: &str) -> Result<bool, Job
         return Ok(false);
     }
     Err(JobRead::Unknown)
-}
-
-#[derive(Debug)]
-pub struct BoundedOutput {
-    pub timed_out: bool,
-    pub code: i32,
-    pub stdout: Vec<u8>,
-    pub stderr: Vec<u8>,
-}
-
-/// GNU `timeout --kill-after` analogue: SIGTERM at `timeout`, SIGKILL after
-/// `kill_after`. Timed-out commands report exit 124. Used by doctor SSH,
-/// listener `lsof`, and the runner's startup probe.
-pub fn run_with_deadline(
-    cmd: &mut Command,
-    timeout: Duration,
-    kill_after: Duration,
-    poll: Duration,
-) -> io::Result<BoundedOutput> {
-    cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-    let mut child = cmd.spawn()?;
-    let mut stdout_pipe = child
-        .stdout
-        .take()
-        .ok_or_else(|| io::Error::other("missing stdout pipe"))?;
-    let mut stderr_pipe = child
-        .stderr
-        .take()
-        .ok_or_else(|| io::Error::other("missing stderr pipe"))?;
-    let stdout_thread = thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout_pipe.read_to_end(&mut buf);
-        buf
-    });
-    let stderr_thread = thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stderr_pipe.read_to_end(&mut buf);
-        buf
-    });
-
-    let deadline = Instant::now() + timeout;
-    let poll = poll.max(Duration::from_millis(1));
-    loop {
-        if let Some(status) = child.try_wait()? {
-            let stdout = stdout_thread.join().unwrap_or_default();
-            let stderr = stderr_thread.join().unwrap_or_default();
-            return Ok(BoundedOutput {
-                timed_out: false,
-                code: exit_status_code(status),
-                stdout,
-                stderr,
-            });
-        }
-        if Instant::now() >= deadline {
-            break;
-        }
-        thread::sleep(poll.min(deadline.saturating_duration_since(Instant::now())));
-    }
-
-    send_signal(child.id(), SIGTERM);
-    let kill_at = Instant::now() + kill_after;
-    loop {
-        if let Some(status) = child.try_wait()? {
-            let stdout = stdout_thread.join().unwrap_or_default();
-            let stderr = stderr_thread.join().unwrap_or_default();
-            return Ok(BoundedOutput {
-                timed_out: true,
-                code: TIMEOUT_EXIT,
-                stdout,
-                stderr: if stderr.is_empty() {
-                    format!("timed out; child exited {status}").into_bytes()
-                } else {
-                    stderr
-                },
-            });
-        }
-        if Instant::now() >= kill_at {
-            send_signal(child.id(), SIGKILL);
-            let _ = child.kill();
-            let _ = child.wait();
-            break;
-        }
-        thread::sleep(poll);
-    }
-
-    let stdout = stdout_thread.join().unwrap_or_default();
-    let stderr = stderr_thread.join().unwrap_or_default();
-    Ok(BoundedOutput {
-        timed_out: true,
-        code: TIMEOUT_EXIT,
-        stdout,
-        stderr,
-    })
-}
-
-pub(crate) fn send_signal(pid: u32, sig: i32) {
-    // SAFETY: kill(pid, sig) is valid for any pid; ESRCH is ignored.
-    unsafe {
-        let _ = kill(pid as i32, sig);
-    }
-}
-
-pub(crate) fn exit_status_code(status: std::process::ExitStatus) -> i32 {
-    if let Some(code) = status.code() {
-        return code;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::ExitStatusExt;
-        if let Some(sig) = status.signal() {
-            return 128 + sig;
-        }
-    }
-    1
-}
-
-pub(crate) fn program_is_runnable(program: &OsStr) -> bool {
-    let path = Path::new(program);
-    if path.components().count() > 1 || path.is_absolute() {
-        return is_executable_file(path);
-    }
-    let Some(paths) = std::env::var_os("PATH") else {
-        return false;
-    };
-    for dir in std::env::split_paths(&paths) {
-        if is_executable_file(&dir.join(path)) {
-            return true;
-        }
-    }
-    false
-}
-
-fn is_executable_file(path: &Path) -> bool {
-    if !path.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        match path.metadata() {
-            Ok(meta) => meta.permissions().mode() & 0o111 != 0,
-            Err(_) => false,
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
 }

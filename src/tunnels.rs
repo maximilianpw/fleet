@@ -12,7 +12,10 @@ use std::time::Duration;
 
 use thiserror::Error;
 
+use crate::config::{Supervisor, TunnelMapping};
 use crate::launchd::{self, gui_target, job_is_loaded, launch_agent_plist, Launchctl};
+use crate::parse_decimal;
+use crate::process::run_with_deadline;
 
 pub const NO_SUPERVISOR_MESSAGE: &str =
     "fleet: managed tunnels are supervised by macOS launchd; this host has no tunnel supervisor.";
@@ -25,29 +28,6 @@ const LISTEN_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const LISTEN_PROBE_KILL_AFTER: Duration = Duration::from_secs(1);
 const LISTEN_POLL: Duration = Duration::from_millis(20);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Supervisor {
-    None,
-    Launchd,
-}
-
-impl Supervisor {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Launchd => "launchd",
-        }
-    }
-
-    pub fn from_config(name: &str) -> Option<Self> {
-        match name {
-            "none" => Some(Self::None),
-            "launchd" => Some(Self::Launchd),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mapping {
     pub local_port: u16,
@@ -55,6 +35,18 @@ pub struct Mapping {
     pub remote_port: u16,
     pub remote_host: String,
     pub label: String,
+}
+
+impl From<&TunnelMapping> for Mapping {
+    fn from(mapping: &TunnelMapping) -> Self {
+        Self {
+            local_port: mapping.local_port.get(),
+            host: mapping.host.clone(),
+            remote_port: mapping.remote_port.get(),
+            remote_host: mapping.remote_host.clone(),
+            label: mapping.label.clone(),
+        }
+    }
 }
 
 impl Mapping {
@@ -170,6 +162,8 @@ pub enum TunnelError {
     KickstartFailed { target: String },
     #[error("fleet: could not read launchd state for {target}")]
     JobStateUnknown { target: String },
+    #[error("fleet: failed to write output: {0}")]
+    Output(#[from] io::Error),
 }
 
 impl TunnelError {
@@ -185,7 +179,8 @@ impl TunnelError {
             | Self::EnableFailed { .. }
             | Self::BootstrapFailed { .. }
             | Self::KickstartFailed { .. }
-            | Self::JobStateUnknown { .. } => 1,
+            | Self::JobStateUnknown { .. }
+            | Self::Output(_) => 1,
         }
     }
 }
@@ -264,7 +259,7 @@ impl ListenProbe for SystemListenProbe {
     fn listening_pids(&self, port: u16) -> Result<Vec<u32>, ListenError> {
         let mut cmd = Command::new(&self.lsof_program);
         cmd.args(["-nP", "-a", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-t"]);
-        let output = launchd::run_with_deadline(
+        let output = run_with_deadline(
             &mut cmd,
             self.lsof_timeout,
             self.lsof_kill_after,
@@ -301,14 +296,7 @@ impl ListenProbe for SystemListenProbe {
 pub fn parse_lsof_pids(stdout: &str) -> Vec<u32> {
     stdout
         .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || !trimmed.bytes().all(|b| b.is_ascii_digit()) {
-                None
-            } else {
-                trimmed.parse().ok()
-            }
-        })
+        .filter_map(|line| parse_decimal(line.trim()))
         .collect()
 }
 
@@ -318,13 +306,7 @@ pub fn parse_ps_identity(stdout: &str) -> Option<ProcessIdentity> {
         return None;
     }
     let mut parts = line.split_whitespace();
-    let ppid = parts.next().and_then(|tok| {
-        if tok.bytes().all(|b| b.is_ascii_digit()) {
-            tok.parse().ok()
-        } else {
-            None
-        }
-    });
+    let ppid = parts.next().and_then(parse_decimal);
     let comm = parts.next().unwrap_or("").to_string();
     Some(ProcessIdentity { ppid, comm })
 }
@@ -468,11 +450,8 @@ pub fn print_status(
         out,
         "{:<8} {:<28} {:<12} {:<10} LOCAL_LISTEN",
         "LOCAL", "REMOTE", "SUPERVISOR", "STATE"
-    )
-    .map_err(io_to_launchctl)?;
-    let mut found = false;
+    )?;
     for mapping in ctx.mappings {
-        found = true;
         let obs = inspect(mapping, ctx.supervisor, ctx.uid, launchd, listen);
         writeln!(
             out,
@@ -482,13 +461,12 @@ pub fn print_status(
             ctx.supervisor.as_str(),
             obs.state().as_str(),
             obs.listen.as_str()
-        )
-        .map_err(io_to_launchctl)?;
+        )?;
     }
-    if !found {
-        writeln!(out, "{NO_TUNNELS_CONFIGURED}").map_err(io_to_launchctl)?;
+    if ctx.mappings.is_empty() {
+        writeln!(out, "{NO_TUNNELS_CONFIGURED}")?;
     } else if ctx.supervisor != Supervisor::Launchd {
-        writeln!(out, "{MACOS_ONLY_MESSAGE}").map_err(io_to_launchctl)?;
+        writeln!(out, "{MACOS_ONLY_MESSAGE}")?;
     }
     Ok(())
 }
@@ -636,10 +614,4 @@ fn listener_is_pid_or_direct_ssh(
     probe.process_identity(pid).map(|identity| {
         job_pid.is_some() && identity.ppid == job_pid && command_basename(&identity.comm) == "ssh"
     })
-}
-
-fn io_to_launchctl(err: io::Error) -> TunnelError {
-    TunnelError::JobStateUnknown {
-        target: err.to_string(),
-    }
 }

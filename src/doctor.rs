@@ -11,10 +11,12 @@ use std::time::Duration;
 
 use thiserror::Error;
 
-use crate::launchd::{self, Launchctl};
+use crate::config::{is_managed_remote_host, Supervisor};
+use crate::launchd::Launchctl;
+use crate::process::run_with_deadline;
 use crate::tunnels::{
     self, has_managed_tunnels, inspect, mappings_for_host, require_launchctl, ListenProbe,
-    ListenerOwnership, Mapping, Supervisor, SupervisorState, TunnelContext, NO_TUNNELS_CONFIGURED,
+    ListenerOwnership, Mapping, SupervisorState, TunnelContext, NO_TUNNELS_CONFIGURED,
 };
 
 pub const DOCTOR_SSH_TIMEOUT: Duration = Duration::from_secs(15);
@@ -149,7 +151,7 @@ impl SshProbe for SystemSsh {
         } else {
             (deadlines.ssh, deadlines.ssh_kill_after)
         };
-        match launchd::run_with_deadline(&mut cmd, timeout, kill_after, deadlines.poll) {
+        match run_with_deadline(&mut cmd, timeout, kill_after, deadlines.poll) {
             Ok(output) => SshOutcome {
                 code: output.code,
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
@@ -187,18 +189,11 @@ pub fn ssh_argv(target: &str, remote_command: Option<&str>) -> Vec<OsString> {
 }
 
 /// Remote command passed as one SSH argument so a fish login shell can parse
-/// it. Host and port are interpolated only after [`remote_host_is_valid`].
+/// it. Host and port are interpolated only after [`is_managed_remote_host`].
 pub fn remote_listen_command(remote_host: &str, remote_port: u16) -> String {
     format!(
         "bash -c 'command -v timeout >/dev/null || exit 69; if timeout 3 bash -c \"exec 3<>/dev/tcp/{remote_host}/{remote_port}\"; then exit 0; else exit 1; fi'"
     )
-}
-
-pub fn remote_host_is_valid(host: &str) -> bool {
-    !host.is_empty()
-        && host
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
 }
 
 pub fn classify_ssh_stderr(stderr: &str) -> SshState {
@@ -343,7 +338,7 @@ fn diagnose_mapping(
     let obs = inspect(mapping, ctx.supervisor, ctx.uid, launchd, listen);
     let mut remote = RemoteListen::Skipped;
     if ssh_state == SshState::Reachable && obs.state() != SupervisorState::Paused {
-        if !remote_host_is_valid(&mapping.remote_host) {
+        if !is_managed_remote_host(&mapping.remote_host) {
             return Err(DoctorError::InvalidRemoteHost {
                 host: mapping.remote_host.clone(),
             });

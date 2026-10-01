@@ -11,6 +11,7 @@ use thiserror::Error;
 
 use crate::config::{
     is_safe_session_name, parse_port, validate_ssh_target, FleetConfig, PortError, TargetError,
+    DEFAULT_TMUX_COMMAND, DEFAULT_TMUX_SESSION,
 };
 use crate::process::{PlannedCommand, ProcessEnv};
 
@@ -126,7 +127,7 @@ pub fn plan_ssh(
             if !forwards.is_empty() {
                 return Err(SshError::ForwardOnLocalHost);
             }
-            let session = session.unwrap_or("main");
+            let session = session.unwrap_or(DEFAULT_TMUX_SESSION);
             validate_session(session)?;
             return Ok(PlannedCommand::tmux(vec![
                 "new-session".into(),
@@ -169,7 +170,7 @@ pub fn plan_ssh(
     if let Some(session) = session {
         validate_session(session)?;
         return Ok(PlannedCommand::ssh(
-            ssh_named_session_args(&forward_args, host, "tmux", session),
+            ssh_named_session_args(&forward_args, host, DEFAULT_TMUX_COMMAND, session),
             "open a remote SSH session",
         ));
     }

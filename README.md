@@ -10,7 +10,7 @@ source does not switch an existing host configuration.
 
 ## Install
 
-Cargo, after `Cargo.lock` exists:
+Cargo:
 
 ```sh
 cargo install --locked --path . --root "$PWD/target/fleet-prefix"
@@ -113,6 +113,7 @@ cargo fmt --all --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 nix build path:$PWD#fleet path:$PWD#checks.x86_64-linux.fleet path:$PWD#checks.x86_64-linux.home-manager --no-link
+alejandra --check flake.nix nix
 ```
 
 Supported package outputs are `x86_64-linux` and `aarch64-darwin`. The Linux

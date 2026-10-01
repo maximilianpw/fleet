@@ -7,12 +7,13 @@
 //! fabricates ownership. With `launchd` and no job snapshot, a mapped port is
 //! treated as ambiguous rather than guessed.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use thiserror::Error;
 
 use crate::config::{FleetConfig, PortError, Supervisor};
 use crate::process::{ObservedProcess, ProcessError, ProcessTable, SignalSender};
+use crate::{is_decimal, parse_decimal};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForwardRow {
@@ -32,22 +33,18 @@ pub trait ManagedForwardInspector {
     fn classify(&self, pid: u32, local_port: u16) -> ManagedClass;
 }
 
-/// Production inspector until launchd job/child identity lands in Stage C.
+/// Mapped-port policy used when launchd identity cannot be read: under
+/// `launchd`, any mapped port is ambiguous; under `none`, nothing is managed.
 pub struct ConservativeManagedInspector {
     supervisor: Supervisor,
-    mapped_ports: Vec<u16>,
+    mapped_ports: BTreeSet<u16>,
 }
 
 impl ConservativeManagedInspector {
     pub fn from_config(config: &FleetConfig) -> Self {
         Self {
             supervisor: config.tunnels.supervisor,
-            mapped_ports: config
-                .tunnels
-                .mappings
-                .iter()
-                .map(|mapping| mapping.local_port.get())
-                .collect(),
+            mapped_ports: config.mapped_local_ports(),
         }
     }
 }
@@ -61,22 +58,6 @@ impl ManagedForwardInspector for ConservativeManagedInspector {
             }
             Supervisor::Launchd => ManagedClass::Unmanaged,
         }
-    }
-}
-
-/// Test inspector that returns a class by PID, else `default`.
-#[derive(Debug, Clone)]
-pub struct SnapshotInspector {
-    pub class_by_pid: BTreeMap<u32, ManagedClass>,
-    pub default: ManagedClass,
-}
-
-impl ManagedForwardInspector for SnapshotInspector {
-    fn classify(&self, pid: u32, _local_port: u16) -> ManagedClass {
-        self.class_by_pid
-            .get(&pid)
-            .cloned()
-            .unwrap_or_else(|| self.default.clone())
     }
 }
 
@@ -98,8 +79,12 @@ pub enum ForwardError {
         "fleet: refuse to delete PID {pid}: managed tunnel ownership could not be established"
     )]
     AmbiguousManaged { pid: u32 },
-    #[error("fleet: failed to stop SSH forward process {pid}")]
-    StopFailed { pid: u32 },
+    /// Some PIDs were signaled before `source` stopped the batch.
+    #[error("{}", partial_stop_message(.stopped, .source))]
+    PartiallyStopped {
+        stopped: Vec<u32>,
+        source: Box<ForwardError>,
+    },
     #[error(transparent)]
     Port(#[from] PortError),
     #[error(transparent)]
@@ -110,23 +95,37 @@ impl ForwardError {
     pub fn exit_code(&self) -> i32 {
         match self {
             Self::MissingPids | Self::PidNotNumeric(_) | Self::Port(_) => 2,
+            Self::PartiallyStopped { source, .. } => source.exit_code(),
             _ => 1,
         }
     }
 }
 
+/// `fleet: stopped SSH forward process PID` line, shared by success output
+/// and partial-failure reports.
+pub fn stopped_message(pid: u32) -> String {
+    format!("fleet: stopped SSH forward process {pid}")
+}
+
+fn partial_stop_message(stopped: &[u32], source: &ForwardError) -> String {
+    let mut message = String::new();
+    for pid in stopped {
+        message.push_str(&stopped_message(*pid));
+        message.push('\n');
+    }
+    message.push_str(&source.to_string());
+    message
+}
+
 /// Extract the local port from an OpenSSH `-L` spec the way the legacy script did.
 pub fn forward_local_port(spec: &str) -> Option<u16> {
     let (first, rest) = spec.split_once(':')?;
-    let port_token = if first.is_empty() || !first.bytes().all(|b| b.is_ascii_digit()) {
-        rest.split(':').next().unwrap_or("")
-    } else {
+    let port_token = if is_decimal(first) {
         first
+    } else {
+        rest.split(':').next().unwrap_or("")
     };
-    if port_token.is_empty() || !port_token.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    port_token.parse().ok()
+    parse_decimal(port_token)
 }
 
 pub fn collect_forward_rows(processes: &[ObservedProcess]) -> Vec<ForwardRow> {
@@ -174,14 +173,6 @@ fn is_ssh(argv: &[String]) -> bool {
         .is_some_and(|program| program == "ssh" || program.ends_with("/ssh"))
 }
 
-pub fn rows_for_port(rows: &[ForwardRow], port: u16) -> Vec<&ForwardRow> {
-    rows.iter().filter(|row| row.local_port == port).collect()
-}
-
-pub fn port_has_forward(rows: &[ForwardRow], port: u16) -> bool {
-    rows.iter().any(|row| row.local_port == port)
-}
-
 pub fn render_forward_list(rows: &[ForwardRow], filter_port: Option<u16>) -> String {
     let mut out = String::new();
     if let Some(port) = filter_port {
@@ -218,7 +209,7 @@ pub fn render_forward_list(rows: &[ForwardRow], filter_port: Option<u16>) -> Str
     out
 }
 
-pub fn port_busy_error(port: u16, rows: &[ForwardRow]) -> ForwardError {
+fn port_busy_error(port: u16, rows: &[ForwardRow]) -> ForwardError {
     let mut message = format!("fleet: local port {port} already has an active SSH forward.\n");
     message.push_str("fleet: stop the existing forward before opening another one:\n");
     message.push_str(&render_forward_list(rows, Some(port)));
@@ -228,29 +219,22 @@ pub fn port_busy_error(port: u16, rows: &[ForwardRow]) -> ForwardError {
 
 pub fn ensure_ports_free(ports: &[u16], processes: &[ObservedProcess]) -> Result<(), ForwardError> {
     let rows = collect_forward_rows(processes);
-    for port in ports {
-        if port_has_forward(&rows, *port) {
-            return Err(port_busy_error(*port, &rows));
-        }
+    match ports
+        .iter()
+        .find(|port| rows.iter().any(|row| row.local_port == **port))
+    {
+        Some(port) => Err(port_busy_error(*port, &rows)),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 pub fn parse_forward_pids(raw: &[String]) -> Result<Vec<u32>, ForwardError> {
     if raw.is_empty() {
         return Err(ForwardError::MissingPids);
     }
-    let mut pids = Vec::new();
-    for token in raw {
-        if token.is_empty() || !token.bytes().all(|b| b.is_ascii_digit()) {
-            return Err(ForwardError::PidNotNumeric(token.clone()));
-        }
-        let pid: u32 = token
-            .parse()
-            .map_err(|_| ForwardError::PidNotNumeric(token.clone()))?;
-        pids.push(pid);
-    }
-    Ok(pids)
+    raw.iter()
+        .map(|token| parse_decimal(token).ok_or_else(|| ForwardError::PidNotNumeric(token.clone())))
+        .collect()
 }
 
 pub fn stop_forwards<T: ProcessTable, S: SignalSender>(
@@ -273,18 +257,37 @@ pub fn stop_forwards<T: ProcessTable, S: SignalSender>(
 
     let mut stopped = Vec::new();
     for pid in pids {
-        let live = collect_forward_rows(&table.list()?);
-        let rows: Vec<&ForwardRow> = live.iter().filter(|row| row.pid == *pid).collect();
-        if rows.is_empty() {
-            return Err(ForwardError::PidNotForward(*pid));
+        if let Err(error) = reobserve_and_stop(*pid, table, inspector, signals) {
+            return Err(if stopped.is_empty() {
+                error
+            } else {
+                ForwardError::PartiallyStopped {
+                    stopped,
+                    source: Box::new(error),
+                }
+            });
         }
-        refuse_managed(*pid, &rows, inspector)?;
-        signals
-            .signal(*pid)
-            .map_err(|_| ForwardError::StopFailed { pid: *pid })?;
         stopped.push(*pid);
     }
     Ok(stopped)
+}
+
+/// Ownership is re-observed immediately before each signal; a PID checked
+/// earlier in the batch may have exited or been replaced since.
+fn reobserve_and_stop<T: ProcessTable, S: SignalSender>(
+    pid: u32,
+    table: &T,
+    inspector: &dyn ManagedForwardInspector,
+    signals: &S,
+) -> Result<(), ForwardError> {
+    let live = collect_forward_rows(&table.list()?);
+    let rows: Vec<&ForwardRow> = live.iter().filter(|row| row.pid == pid).collect();
+    if rows.is_empty() {
+        return Err(ForwardError::PidNotForward(pid));
+    }
+    refuse_managed(pid, &rows, inspector)?;
+    signals.signal(pid)?;
+    Ok(())
 }
 
 fn refuse_managed(

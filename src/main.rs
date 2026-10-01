@@ -1,4 +1,3 @@
-use std::io;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -7,14 +6,16 @@ use clap_complete::{generate, Shell};
 use fleet::config::{load_config, parse_port, validate_ssh_target};
 use fleet::copy::plan_copy;
 use fleet::forwards::{
-    collect_forward_rows, ensure_ports_free, parse_forward_pids, render_forward_list, stop_forwards,
+    collect_forward_rows, ensure_ports_free, parse_forward_pids, render_forward_list,
+    stop_forwards, stopped_message,
 };
 use fleet::process::{exec_replace, PathKill, PathPsTable, ProcessEnv, ProcessTable};
 use fleet::ssh::{
     local_ports_of, parse_ssh_tail, plan_ad_hoc_forward, plan_run, plan_shell, plan_ssh, plan_t3,
 };
 use fleet::{
-    run_doctor_command, run_tunnel_command, ConfiguredInspector, FleetError, TunnelCommand, USAGE,
+    run_doctor_command, run_tunnel_command, write_stdout, ConfiguredInspector, FleetError,
+    TunnelCommand, USAGE,
 };
 
 #[derive(Debug, Parser)]
@@ -80,13 +81,13 @@ enum Commands {
         host: String,
         local_port: Option<String>,
     },
-    /// Supervised localhost tunnels. Stage C implements pause/resume/status.
+    /// Show, pause, or resume supervised localhost tunnels.
     #[command(subcommand_required = false)]
     Tunnel {
         #[command(subcommand)]
         command: Option<TunnelCli>,
     },
-    /// Check SSH reachability and tunnel health. Stage C implements probes.
+    /// Check SSH reachability and tunnel health.
     Doctor { host: String },
     /// Configuration helpers.
     #[command(subcommand)]
@@ -134,8 +135,9 @@ fn run(cli: Cli) -> Result<(), FleetError> {
     let env = ProcessEnv::from_os();
     match cli.command {
         Some(Commands::Completions { shell }) => {
-            generate(shell, &mut Cli::command(), "fleet", &mut io::stdout());
-            Ok(())
+            let mut script = Vec::new();
+            generate(shell, &mut Cli::command(), "fleet", &mut script);
+            write_stdout(script)
         }
         Some(Commands::Config(ConfigCli::Validate)) => {
             load_config(cli.config.as_deref(), &env)?;
@@ -143,8 +145,7 @@ fn run(cli: Cli) -> Result<(), FleetError> {
         }
         None | Some(Commands::List) => {
             let config = load_config(cli.config.as_deref(), &env)?;
-            print!("{}", config.render_list());
-            Ok(())
+            write_stdout(config.render_list())
         }
         Some(Commands::Ssh { host, args }) => {
             let config = load_config(cli.config.as_deref(), &env)?;
@@ -239,8 +240,7 @@ fn dispatch_forward(
             };
             let table = PathPsTable { env };
             let rows = collect_forward_rows(&table.list()?);
-            print!("{}", render_forward_list(&rows, port));
-            Ok(())
+            write_stdout(render_forward_list(&rows, port))
         }
         [cmd, rest @ ..] if matches!(cmd.as_str(), "stop" | "delete" | "rm") => {
             let config = load_config(cli_config.as_deref(), env)?;
@@ -252,10 +252,11 @@ fn dispatch_forward(
             };
             let signals = PathKill { env };
             let stopped = stop_forwards(&pids, &table, &inspector, &signals)?;
-            for pid in stopped {
-                println!("fleet: stopped SSH forward process {pid}");
-            }
-            Ok(())
+            let report: String = stopped
+                .into_iter()
+                .map(|pid| stopped_message(pid) + "\n")
+                .collect();
+            write_stdout(report)
         }
         _ => {
             if args.len() < 3 || args.len() > 4 {

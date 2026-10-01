@@ -1,7 +1,7 @@
 # Compatibility
 
-This extraction keeps the Bash Fleet command contracts. Matching mocked tests
-does not inherit live Joyce/Kim acceptance from Plan 001.
+This extraction keeps the Bash Fleet command contracts. Passing the mocked
+tests here is not acceptance on live hosts.
 
 ## Preserved
 
@@ -99,8 +99,7 @@ on the remote host.
 
 ## Not in this package
 
-- Herdr orchestration. Plan 001 proved native Herdr sessions. This CLI does
-  not start or manage them.
+- Herdr orchestration. This CLI does not start or manage Herdr sessions.
 - Workspace state, dynamic tunnel installation, or a second supervisor.
 - Personal inventory, SSH keys, known hosts, or `FLEET.md`.
 - Windows.

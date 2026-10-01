@@ -8,10 +8,11 @@ use std::time::{Duration, Instant};
 use fleet::config::parse_config;
 use fleet::forwards::{
     collect_forward_rows, ensure_ports_free, forward_local_port, parse_forward_pids,
-    render_forward_list, stop_forwards, ForwardError, ManagedClass, SnapshotInspector,
+    render_forward_list, stop_forwards, ConservativeManagedInspector, ForwardError, ManagedClass,
+    ManagedForwardInspector,
 };
 use fleet::process::{
-    parse_ps_output, ObservedProcess, ProcessEnv, RecordingSignals, SnapshotProcesses,
+    parse_ps_output, ObservedProcess, ProcessEnv, ProcessError, ProcessTable, SignalSender,
 };
 use fleet::ssh::{
     parse_ssh_tail, plan_ad_hoc_forward, plan_run, plan_shell, plan_ssh, plan_t3,
@@ -20,6 +21,47 @@ use fleet::ssh::{
 use fleet::PlannedCommand;
 
 use common::{Fixture, MINIMAL_TOML, NIX_STYLE_TOML};
+
+/// Fixed process snapshot. `list` always returns a clone of `rows`.
+#[derive(Debug, Clone, Default)]
+struct SnapshotProcesses {
+    rows: Vec<ObservedProcess>,
+}
+
+impl ProcessTable for SnapshotProcesses {
+    fn list(&self) -> Result<Vec<ObservedProcess>, ProcessError> {
+        Ok(self.rows.clone())
+    }
+}
+
+/// Records signaled PIDs instead of sending a real signal.
+#[derive(Debug, Default)]
+struct RecordingSignals {
+    pids: std::sync::Mutex<Vec<u32>>,
+}
+
+impl SignalSender for RecordingSignals {
+    fn signal(&self, pid: u32) -> Result<(), ProcessError> {
+        self.pids.lock().expect("signal log mutex").push(pid);
+        Ok(())
+    }
+}
+
+/// Returns a class by PID, else `default`.
+#[derive(Debug, Clone)]
+struct SnapshotInspector {
+    class_by_pid: BTreeMap<u32, ManagedClass>,
+    default: ManagedClass,
+}
+
+impl ManagedForwardInspector for SnapshotInspector {
+    fn classify(&self, pid: u32, _local_port: u16) -> ManagedClass {
+        self.class_by_pid
+            .get(&pid)
+            .cloned()
+            .unwrap_or_else(|| self.default.clone())
+    }
+}
 
 fn arg_strs(command: &PlannedCommand) -> Vec<&str> {
     command.args.iter().map(String::as_str).collect()
@@ -629,6 +671,87 @@ fn binary_port_conflict_does_not_exec_ssh() {
     assert!(!fixture.ssh_log.exists());
 }
 
+/// Fails to signal one PID with `error`; records the rest.
+struct FailingSignals {
+    fail_pid: u32,
+    error: fn(u32) -> ProcessError,
+    recorded: RecordingSignals,
+}
+
+impl SignalSender for FailingSignals {
+    fn signal(&self, pid: u32) -> Result<(), ProcessError> {
+        if pid == self.fail_pid {
+            return Err((self.error)(pid));
+        }
+        self.recorded.signal(pid)
+    }
+}
+
+fn two_forwards() -> SnapshotProcesses {
+    let forward = |pid, port| ObservedProcess {
+        pid,
+        argv: vec![
+            "ssh".into(),
+            "-L".into(),
+            format!("127.0.0.1:{port}:localhost:{port}"),
+            "workbox".into(),
+        ],
+    };
+    SnapshotProcesses {
+        rows: vec![forward(77, 3000), forward(78, 3001)],
+    }
+}
+
+fn unmanaged() -> SnapshotInspector {
+    SnapshotInspector {
+        class_by_pid: BTreeMap::new(),
+        default: ManagedClass::Unmanaged,
+    }
+}
+
+#[test]
+fn partial_delete_reports_already_stopped_pids() {
+    let signals = FailingSignals {
+        fail_pid: 78,
+        error: |pid| ProcessError::KillFailed { pid },
+        recorded: RecordingSignals::default(),
+    };
+    let error = stop_forwards(&[77, 78], &two_forwards(), &unmanaged(), &signals).unwrap_err();
+    assert_eq!(*signals.recorded.pids.lock().unwrap(), vec![77]);
+    match &error {
+        ForwardError::PartiallyStopped { stopped, source } => {
+            assert_eq!(stopped, &vec![77]);
+            assert!(matches!(
+                **source,
+                ForwardError::Process(ProcessError::KillFailed { pid: 78 })
+            ));
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    assert_eq!(error.exit_code(), 1);
+    assert_eq!(
+        error.to_string(),
+        "fleet: stopped SSH forward process 77\nfleet: failed to stop SSH forward process 78"
+    );
+}
+
+#[test]
+fn missing_kill_is_reported_as_a_missing_command() {
+    let signals = FailingSignals {
+        fail_pid: 77,
+        error: |_| ProcessError::MissingCommand {
+            name: "kill".into(),
+            operation: "stop an SSH forward".into(),
+        },
+        recorded: RecordingSignals::default(),
+    };
+    let error = stop_forwards(&[77], &two_forwards(), &unmanaged(), &signals).unwrap_err();
+    assert!(
+        error.to_string().contains("missing command `kill`"),
+        "{error}"
+    );
+}
+
 #[test]
 fn unmanaged_delete_reobserves_and_records_signal() {
     let table = SnapshotProcesses {
@@ -700,7 +823,7 @@ fn launchd_mapped_port_without_snapshot_is_ambiguous() {
             ],
         }],
     };
-    let inspector = fleet::managed_inspector_for(&config);
+    let inspector = ConservativeManagedInspector::from_config(&config);
     let signals = RecordingSignals::default();
     match stop_forwards(&[99], &table, &inspector, &signals) {
         Err(ForwardError::AmbiguousManaged { pid }) => assert_eq!(pid, 99),
@@ -722,7 +845,7 @@ fn supervisor_none_does_not_fabricate_managed_ownership() {
             ],
         }],
     };
-    let inspector = fleet::managed_inspector_for(&config);
+    let inspector = ConservativeManagedInspector::from_config(&config);
     let signals = RecordingSignals::default();
     let stopped = stop_forwards(&[99], &table, &inspector, &signals).unwrap();
     assert_eq!(stopped, vec![99]);
@@ -839,4 +962,22 @@ fn doctor_unknown_host_is_rejected_without_ssh() {
     assert_eq!(code, 2, "{stderr}");
     assert!(stderr.contains("unknown Fleet host: ghost"));
     assert!(!fixture.ssh_log.exists());
+}
+
+#[test]
+fn closed_stdout_is_an_error_not_a_panic() {
+    let fixture = Fixture::new();
+    let (reader, writer) = std::io::pipe().expect("pipe");
+    drop(reader);
+    let output = fixture
+        .fleet()
+        .args(["completions", "bash"])
+        .stdout(writer)
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run fleet");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("fleet: failed to write output"), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
 }

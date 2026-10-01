@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::parse_decimal;
 use crate::process::ProcessEnv;
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -156,6 +157,15 @@ pub enum Supervisor {
     Launchd,
 }
 
+impl Supervisor {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Launchd => "launchd",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AliasTargets {
@@ -255,14 +265,14 @@ pub struct ResolvedHost {
 impl FleetConfig {
     pub fn resolve(&self, token: &str) -> Option<ResolvedHost> {
         if let Some(host) = self.hosts.get(token) {
-            return Some(resolve_canonical(token, token, host, self));
+            return Some(self.resolve_host(token, token, host, None));
         }
-        for (canonical, host) in &self.hosts {
-            if host.aliases.iter().any(|alias| alias == token) {
-                return Some(resolve_alias(canonical, token, host, self));
-            }
-        }
-        None
+        self.hosts.iter().find_map(|(canonical, host)| {
+            host.aliases
+                .iter()
+                .any(|alias| alias == token)
+                .then(|| self.resolve_host(canonical, token, host, host.alias_targets.get(token)))
+        })
     }
 
     pub fn is_local_token(&self, token: &str) -> bool {
@@ -275,6 +285,42 @@ impl FleetConfig {
             .iter()
             .map(|mapping| mapping.local_port.get())
             .collect()
+    }
+
+    /// Apply alias overrides (if any) on top of the canonical host's targets.
+    fn resolve_host(
+        &self,
+        canonical: &str,
+        token: &str,
+        host: &HostConfig,
+        overrides: Option<&AliasTargets>,
+    ) -> ResolvedHost {
+        let ssh_target = overrides
+            .and_then(|value| value.ssh_target.clone())
+            .unwrap_or_else(|| host.ssh_target.clone());
+        let tmux_target = overrides
+            .and_then(|value| value.tmux_target.clone())
+            .or_else(|| host.tmux_target.clone());
+        let forward_target = overrides
+            .and_then(|value| value.forward_target.clone())
+            .unwrap_or_else(|| host.forward_target().to_string());
+        ResolvedHost {
+            canonical: canonical.to_string(),
+            token: token.to_string(),
+            is_local: canonical == self.current_host,
+            ssh_target,
+            display_target: host.display_target().to_string(),
+            tmux_target,
+            forward_target,
+            tmux_command: host.tmux_command().to_string(),
+            tmux_session: host.tmux_session().to_string(),
+            t3code_port: host.t3code_port.map(Port::get),
+            user: host.user.clone(),
+            role: host.role.clone(),
+            os: host.os.clone(),
+            client_enrolled: host.client_enrolled,
+            aliases: host.aliases.clone(),
+        }
     }
 
     pub fn render_list(&self) -> String {
@@ -302,71 +348,8 @@ impl FleetConfig {
     }
 }
 
-fn resolve_canonical(
-    canonical: &str,
-    token: &str,
-    host: &HostConfig,
-    config: &FleetConfig,
-) -> ResolvedHost {
-    ResolvedHost {
-        canonical: canonical.to_string(),
-        token: token.to_string(),
-        is_local: canonical == config.current_host,
-        ssh_target: host.ssh_target.clone(),
-        display_target: host.display_target().to_string(),
-        tmux_target: host.tmux_target.clone(),
-        forward_target: host.forward_target().to_string(),
-        tmux_command: host.tmux_command().to_string(),
-        tmux_session: host.tmux_session().to_string(),
-        t3code_port: host.t3code_port.map(Port::get),
-        user: host.user.clone(),
-        role: host.role.clone(),
-        os: host.os.clone(),
-        client_enrolled: host.client_enrolled,
-        aliases: host.aliases.clone(),
-    }
-}
-
-fn resolve_alias(
-    canonical: &str,
-    token: &str,
-    host: &HostConfig,
-    config: &FleetConfig,
-) -> ResolvedHost {
-    let overrides = host.alias_targets.get(token);
-    let ssh_target = overrides
-        .and_then(|value| value.ssh_target.clone())
-        .unwrap_or_else(|| host.ssh_target.clone());
-    let tmux_target = overrides
-        .and_then(|value| value.tmux_target.clone())
-        .or_else(|| host.tmux_target.clone());
-    let forward_target = overrides
-        .and_then(|value| value.forward_target.clone())
-        .unwrap_or_else(|| host.forward_target().to_string());
-    ResolvedHost {
-        canonical: canonical.to_string(),
-        token: token.to_string(),
-        is_local: canonical == config.current_host,
-        ssh_target,
-        display_target: host.display_target().to_string(),
-        tmux_target,
-        forward_target,
-        tmux_command: host.tmux_command().to_string(),
-        tmux_session: host.tmux_session().to_string(),
-        t3code_port: host.t3code_port.map(Port::get),
-        user: host.user.clone(),
-        role: host.role.clone(),
-        os: host.os.clone(),
-        client_enrolled: host.client_enrolled,
-        aliases: host.aliases.clone(),
-    }
-}
-
 pub fn parse_port(raw: &str) -> Result<u16, PortError> {
-    if raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(PortError::NotNumeric);
-    }
-    let value: i64 = raw.parse().map_err(|_| PortError::NotNumeric)?;
+    let value: i64 = parse_decimal(raw).ok_or(PortError::NotNumeric)?;
     Port::from_i64(value).map(Port::get)
 }
 
