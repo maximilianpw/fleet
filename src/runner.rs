@@ -6,14 +6,14 @@
 
 use std::ffi::OsString;
 use std::io::{self, Write};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::parse_decimal;
-use crate::process::{exit_status_code, send_signal};
+use crate::process::{exit_status_code, run_with_deadline_or_stop};
 
 pub const STARTUP_DEADLINE: Duration = Duration::from_secs(45);
 pub const LISTENER_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
@@ -159,33 +159,15 @@ fn supervise_child(cfg: &RunnerConfig, child: &mut std::process::Child) -> Child
             Err(err) => {
                 let _ = writeln!(io::stderr(), "fleet-tunnel-runner: wait failed: {err}");
                 kill_owned(child);
-                return stop_exit_code(cfg)
-                    .map(ChildOutcome::Stop)
-                    .unwrap_or(ChildOutcome::Retry);
+                return retry_unless_stopped(cfg);
             }
         } {
-            if let Some(code) = stop_exit_code(cfg) {
-                return ChildOutcome::Stop(code);
-            }
-            let code = exit_status_code(status);
-            let _ = writeln!(
-                io::stderr(),
-                "fleet-tunnel-runner: ssh exited with status {code}; retrying"
-            );
-            return ChildOutcome::Retry;
+            return child_exited(cfg, status);
         }
 
         if !healthy && Instant::now() >= deadline {
             if let Some(status) = child.try_wait().ok().flatten() {
-                if let Some(code) = stop_exit_code(cfg) {
-                    return ChildOutcome::Stop(code);
-                }
-                let code = exit_status_code(status);
-                let _ = writeln!(
-                    io::stderr(),
-                    "fleet-tunnel-runner: ssh exited with status {code}; retrying"
-                );
-                return ChildOutcome::Retry;
+                return child_exited(cfg, status);
             }
             match child_owns_loopback_listen(cfg, child.id()) {
                 ListenerProbe::Listening => healthy = true,
@@ -205,15 +187,33 @@ fn supervise_child(cfg: &RunnerConfig, child: &mut std::process::Child) -> Child
                         io::stderr(),
                         "fleet-tunnel-runner: ssh did not own the expected listener; retrying"
                     );
-                    return stop_exit_code(cfg)
-                        .map(ChildOutcome::Stop)
-                        .unwrap_or(ChildOutcome::Retry);
+                    return retry_unless_stopped(cfg);
                 }
             }
         }
 
         thread::sleep(poll);
     }
+}
+
+/// The owned SSH child exited on its own: stop if a signal arrived meanwhile,
+/// otherwise log its status and retry.
+fn child_exited(cfg: &RunnerConfig, status: ExitStatus) -> ChildOutcome {
+    if let Some(code) = stop_exit_code(cfg) {
+        return ChildOutcome::Stop(code);
+    }
+    let code = exit_status_code(status);
+    let _ = writeln!(
+        io::stderr(),
+        "fleet-tunnel-runner: ssh exited with status {code}; retrying"
+    );
+    ChildOutcome::Retry
+}
+
+fn retry_unless_stopped(cfg: &RunnerConfig) -> ChildOutcome {
+    stop_exit_code(cfg)
+        .map(ChildOutcome::Stop)
+        .unwrap_or(ChildOutcome::Retry)
 }
 
 fn wait_for_retry_or_stop(cfg: &RunnerConfig) -> Option<i32> {
@@ -267,62 +267,16 @@ fn child_owns_loopback_listen(cfg: &RunnerConfig, pid: u32) -> ListenerProbe {
         &format!("-iTCP@127.0.0.1:{}", cfg.local_port),
         "-sTCP:LISTEN",
         "-t",
-    ])
-    .stdin(Stdio::null())
-    .stdout(Stdio::null())
-    .stderr(Stdio::null());
-    let mut probe = match cmd.spawn() {
-        Ok(child) => child,
-        Err(_) => return ListenerProbe::NotListening,
-    };
-    let poll = cfg.poll_interval.max(Duration::from_millis(1));
-    let deadline = Instant::now() + cfg.listener_probe;
-    loop {
-        if let Some(code) = stop_exit_code(cfg) {
-            kill_owned(&mut probe);
-            return ListenerProbe::Stopped(code);
-        }
-        match probe.try_wait() {
-            Ok(Some(status)) => {
-                return if status.success() {
-                    ListenerProbe::Listening
-                } else {
-                    ListenerProbe::NotListening
-                };
-            }
-            Ok(None) => {}
-            Err(_) => {
-                kill_owned(&mut probe);
-                return ListenerProbe::NotListening;
-            }
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        thread::sleep(poll.min(remaining));
-    }
-
-    send_signal(probe.id(), SIGTERM);
-    let kill_at = Instant::now() + cfg.listener_kill_after;
-    loop {
-        if let Some(code) = stop_exit_code(cfg) {
-            kill_owned(&mut probe);
-            return ListenerProbe::Stopped(code);
-        }
-        match probe.try_wait() {
-            Ok(Some(_)) => return ListenerProbe::NotListening,
-            Ok(None) => {}
-            Err(_) => {
-                kill_owned(&mut probe);
-                return ListenerProbe::NotListening;
-            }
-        }
-        let remaining = kill_at.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            kill_owned(&mut probe);
-            return ListenerProbe::NotListening;
-        }
-        thread::sleep(poll.min(remaining));
+    ]);
+    match run_with_deadline_or_stop(
+        &mut cmd,
+        cfg.listener_probe,
+        cfg.listener_kill_after,
+        cfg.poll_interval,
+        || stop_exit_code(cfg),
+    ) {
+        Ok(Ok(output)) if !output.timed_out && output.code == 0 => ListenerProbe::Listening,
+        Ok(Ok(_)) | Err(_) => ListenerProbe::NotListening,
+        Ok(Err(code)) => ListenerProbe::Stopped(code),
     }
 }

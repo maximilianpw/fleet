@@ -5,12 +5,13 @@
 //! fake executables by putting them first on PATH. Fleet itself does not read
 //! fixture-only environment switches to choose those programs.
 
+use std::convert::Infallible;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Read};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -252,67 +253,139 @@ pub struct BoundedOutput {
 }
 
 /// GNU `timeout --kill-after` analogue: SIGTERM at `timeout`, SIGKILL after
-/// `kill_after`. Timed-out commands report exit 124. Used by doctor SSH,
-/// listener `lsof`, and the runner's startup probe.
+/// `kill_after`. Timed-out commands report exit 124. Used by doctor SSH and
+/// listener `lsof`.
 pub(crate) fn run_with_deadline(
     cmd: &mut Command,
     timeout: Duration,
     kill_after: Duration,
     poll: Duration,
 ) -> io::Result<BoundedOutput> {
+    match run_with_deadline_or_stop(cmd, timeout, kill_after, poll, || None::<Infallible>)? {
+        Ok(output) => Ok(output),
+        Err(never) => match never {},
+    }
+}
+
+/// [`run_with_deadline`] that also polls `stop` before each wait. When `stop`
+/// returns `Some(reason)`, the child is killed and reaped and the reason is
+/// returned as `Ok(Err(reason))`; its partial output is discarded. The
+/// runner's startup probe uses this to honor SIGINT/SIGTERM mid-probe.
+pub(crate) fn run_with_deadline_or_stop<S>(
+    cmd: &mut Command,
+    timeout: Duration,
+    kill_after: Duration,
+    poll: Duration,
+    stop: impl Fn() -> Option<S>,
+) -> io::Result<Result<BoundedOutput, S>> {
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     let mut child = cmd.spawn()?;
     let stdout = drain(child.stdout.take(), "stdout")?;
     let stderr = drain(child.stderr.take(), "stderr")?;
-
-    let deadline = Instant::now() + timeout;
     let poll = poll.max(Duration::from_millis(1));
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(BoundedOutput {
-                timed_out: false,
-                code: exit_status_code(status),
-                stdout: stdout.join().unwrap_or_default(),
-                stderr: stderr.join().unwrap_or_default(),
-            });
-        }
-        if Instant::now() >= deadline {
-            break;
-        }
-        thread::sleep(poll.min(deadline.saturating_duration_since(Instant::now())));
-    }
 
-    send_signal(child.id(), SIGTERM);
-    let kill_at = Instant::now() + kill_after;
-    let mut exit_note = None;
-    loop {
-        if let Some(status) = child.try_wait()? {
-            exit_note = Some(format!("timed out; child exited {status}"));
-            break;
+    let finish = match wait_bounded(&mut child, timeout, kill_after, poll, &stop) {
+        Ok(Ok(finish)) => finish,
+        Ok(Err(reason)) => {
+            kill_and_reap(&mut child);
+            return Ok(Err(reason));
         }
-        if Instant::now() >= kill_at {
-            let _ = child.kill();
-            let _ = child.wait();
-            break;
+        Err(error) => {
+            kill_and_reap(&mut child);
+            return Err(error);
         }
-        thread::sleep(poll);
+    };
+    if finish == Finish::TimedOut(None) {
+        kill_and_reap(&mut child);
     }
 
     let stdout = stdout.join().unwrap_or_default();
     let mut stderr = stderr.join().unwrap_or_default();
-    if stderr.is_empty() {
-        if let Some(note) = exit_note {
-            stderr = note.into_bytes();
+    Ok(Ok(match finish {
+        Finish::Exited(status) => BoundedOutput {
+            timed_out: false,
+            code: exit_status_code(status),
+            stdout,
+            stderr,
+        },
+        Finish::TimedOut(exit) => {
+            if let (true, Some(status)) = (stderr.is_empty(), exit) {
+                stderr = format!("timed out; child exited {status}").into_bytes();
+            }
+            BoundedOutput {
+                timed_out: true,
+                code: TIMEOUT_EXIT,
+                stdout,
+                stderr,
+            }
         }
+    }))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Finish {
+    Exited(ExitStatus),
+    /// Past the deadline. `Some` if the child exited during the SIGTERM grace
+    /// period; `None` if it still needs SIGKILL.
+    TimedOut(Option<ExitStatus>),
+}
+
+enum Wait<S> {
+    Exited(ExitStatus),
+    Expired,
+    Stopped(S),
+}
+
+/// Wait for exit until `timeout`, then SIGTERM and wait `kill_after` more.
+/// `Err(reason)` as soon as `stop` asks for it.
+fn wait_bounded<S>(
+    child: &mut Child,
+    timeout: Duration,
+    kill_after: Duration,
+    poll: Duration,
+    stop: &impl Fn() -> Option<S>,
+) -> io::Result<Result<Finish, S>> {
+    match wait_until(child, Instant::now() + timeout, poll, stop)? {
+        Wait::Exited(status) => return Ok(Ok(Finish::Exited(status))),
+        Wait::Stopped(reason) => return Ok(Err(reason)),
+        Wait::Expired => {}
     }
-    Ok(BoundedOutput {
-        timed_out: true,
-        code: TIMEOUT_EXIT,
-        stdout,
-        stderr,
-    })
+    send_signal(child.id(), SIGTERM);
+    Ok(
+        match wait_until(child, Instant::now() + kill_after, poll, stop)? {
+            Wait::Exited(status) => Ok(Finish::TimedOut(Some(status))),
+            Wait::Expired => Ok(Finish::TimedOut(None)),
+            Wait::Stopped(reason) => Err(reason),
+        },
+    )
+}
+
+fn wait_until<S>(
+    child: &mut Child,
+    until: Instant,
+    poll: Duration,
+    stop: &impl Fn() -> Option<S>,
+) -> io::Result<Wait<S>> {
+    loop {
+        if let Some(reason) = stop() {
+            return Ok(Wait::Stopped(reason));
+        }
+        if let Some(status) = child.try_wait()? {
+            return Ok(Wait::Exited(status));
+        }
+        let remaining = until.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(Wait::Expired);
+        }
+        thread::sleep(poll.min(remaining));
+    }
+}
+
+fn kill_and_reap(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn drain(

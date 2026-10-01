@@ -467,6 +467,29 @@ fn pending_stop_wins_when_child_exits() {
 }
 
 #[test]
+fn hung_listener_probe_times_out_then_reconnects() {
+    let harness = Harness::new();
+    let mut cfg = harness.cfg("hang", "block");
+    let stop = Arc::new(AtomicI32::new(0));
+    cfg.stop = Arc::clone(&stop);
+    cfg.startup_deadline = Duration::from_millis(30);
+    cfg.listener_probe = Duration::from_millis(100);
+    cfg.listener_kill_after = Duration::from_millis(100);
+    let handle = thread::spawn(move || runner::run(&cfg));
+    let first_pid = harness.wait_child_pid();
+    harness.wait_probe_ready();
+
+    harness.wait_spawn_count(2);
+    assert!(
+        !pid_alive(first_pid),
+        "child behind a hung probe was not reaped"
+    );
+    stop.store(15, Ordering::SeqCst);
+
+    assert_eq!(handle.join().unwrap(), 143);
+}
+
+#[test]
 fn stop_during_startup_probe_preserves_signal_exit() {
     let harness = Harness::new();
     let mut cfg = harness.cfg("hang", "block");
