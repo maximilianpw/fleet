@@ -24,6 +24,7 @@
       pkgs.callPackage ./nix/packages/cliproxy-ui.nix {
         sourceRevision = self.shortRev or self.dirtyShortRev or null;
       };
+    mkCliproxyQuota = pkgs: pkgs.callPackage ./nix/packages/cliproxy-quota.nix {};
 
     laptopHost = {
       ssh_target = "laptop";
@@ -344,6 +345,7 @@
     packages = forEachSystem (system: rec {
       fleet = mkFleet (pkgsFor system);
       cliproxy-ui = mkCliproxyUi (pkgsFor system);
+      cliproxy-quota = mkCliproxyQuota (pkgsFor system);
       default = fleet;
     });
 
@@ -355,8 +357,14 @@
         {
           fleet = mkFleetCheck pkgs fleet;
           cliproxy-ui = self.packages.${system}.cliproxy-ui.tests.verify;
+          cliproxy-quota = self.packages.${system}.cliproxy-quota.tests.verify;
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
+          cliproxy-quota-nixos = import ./nix/tests/cliproxy-quota.nix {
+            inherit pkgs;
+            module = self.nixosModules.cliproxy-quota;
+            package = self.packages.${system}.cliproxy-quota;
+          };
           home-manager = mkHomeManagerCheck pkgs fleet;
           alejandra =
             pkgs.runCommand "alejandra" {
@@ -369,6 +377,12 @@
     );
 
     homeManagerModules.default = import ./nix/modules/home-manager.nix;
+
+    # `package` defaults to this flake's build for the host platform.
+    nixosModules.cliproxy-quota = {pkgs, ...}: {
+      imports = [./nix/modules/cliproxy-quota.nix];
+      services.cliproxyapi-quota.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.cliproxy-quota;
+    };
 
     formatter = forEachSystem (system: (pkgsFor system).alejandra);
 

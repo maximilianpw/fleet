@@ -1,7 +1,8 @@
 # Fleet
 
 Monorepo for operational software: the Rust CLI with an optional Home Manager
-module, plus the CLIProxy management UI. OpenSSH, tmux, and launchd stay the
+module, the CLIProxy management UI, and the CLIProxy quota service with its
+NixOS module. OpenSSH, tmux, and launchd stay the
 CLI backends. Personal inventory, trust, and machine configuration stay in the
 consumer Nix config. Staged migration status:
 [docs/monorepo-migration-plan.md](docs/monorepo-migration-plan.md).
@@ -52,6 +53,17 @@ nix build path:$PWD#cliproxy-ui path:$PWD#checks.x86_64-linux.cliproxy-ui --no-l
 ```
 
 Or `bun install --frozen-lockfile && bun run verify` in `apps/cliproxy-ui`.
+
+Quota service (the `-nixos` check boots a VM and needs KVM):
+
+```sh
+nix build path:$PWD#cliproxy-quota path:$PWD#checks.x86_64-linux.cliproxy-quota path:$PWD#checks.x86_64-linux.cliproxy-quota-nixos --no-link
+```
+
+Or `bun install --frozen-lockfile && bun run check` in
+`services/cliproxy-quota`. Its tests never contact provider APIs; inject
+`fetch` and use temporary credential directories. Keep the
+`/quota/v1/{claude,codex,xai}` contract in its README stable.
 After changing `bun.lock`, set both hashes in `nix/packages/cliproxy-ui.nix`
 to `lib.fakeHash` and rebuild to get the new values. The `--os`/`--cpu`
 overrides let both be computed on Linux.
@@ -74,13 +86,17 @@ launchctl, and publishing are separate approvals.
 - `cli/src/` and `cli/tests/`: CLI, library, and integration tests
 - `cli/examples/config.toml`: manual file, `supervisor = "none"`
 - `apps/cliproxy-ui/`: React/Vite management UI, built to one HTML file
+- `services/cliproxy-quota/`: quota endpoint and `cliproxyapi-util`, run by Bun
 - `nix/packages/fleet.nix`: both binaries, completions, wrapped PATH
 - `nix/packages/cliproxy-ui.nix`: `$out/share/cliproxy-ui/management.html`
+- `nix/packages/cliproxy-quota.nix`: `cliproxy-quota-server`, `cliproxyapi-util`
+- `nix/modules/cliproxy-quota.nix`: `nixosModules.cliproxy-quota`, unit `cliproxyapi-quota`
+- `nix/tests/cliproxy-quota.nix`: NixOS VM test for that module
 - `nix/modules/home-manager.nix`: `programs.fleet.enable`, `.package`, snake_case `.settings`
 - `.github/workflows/check.yml`: Linux and macOS Cargo; UI verify; Nix checks
 
-Each package's Nix source is scoped to its own directory, so a UI edit does
-not rebuild the CLI and the reverse. The UI version string is
+Each package's Nix source is scoped to its own directory, so editing one
+package does not rebuild the others. The UI version string is
 `cliproxy-ui-<Fleet short rev>`, supplied by the flake. Never derive it from
 git tags; those version the CLI.
 

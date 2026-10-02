@@ -64,7 +64,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: DeterminateSystems/determinate-nix-action@527f17dd63d2d60d3e5552934bc84b9a33a14d11 # v3
-      - run: nix build "path:$PWD#fleet" "path:$PWD#checks.x86_64-linux.fleet" "path:$PWD#checks.x86_64-linux.home-manager" "path:$PWD#checks.x86_64-linux.alejandra" "path:$PWD#cliproxy-ui" "path:$PWD#checks.x86_64-linux.cliproxy-ui" --no-link
+      - run: nix build "path:$PWD#fleet" "path:$PWD#checks.x86_64-linux.fleet" "path:$PWD#checks.x86_64-linux.home-manager" "path:$PWD#checks.x86_64-linux.alejandra" "path:$PWD#cliproxy-ui" "path:$PWD#checks.x86_64-linux.cliproxy-ui" "path:$PWD#cliproxy-quota" "path:$PWD#checks.x86_64-linux.cliproxy-quota" "path:$PWD#checks.x86_64-linux.cliproxy-quota-nixos" --no-link
       - run: nix eval --raw "path:$PWD#packages.aarch64-darwin.fleet.name"
 
   nix-macos:
@@ -72,4 +72,4 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: DeterminateSystems/determinate-nix-action@527f17dd63d2d60d3e5552934bc84b9a33a14d11 # v3
-      - run: nix build "path:$PWD#fleet" "path:$PWD#checks.aarch64-darwin.fleet" "path:$PWD#cliproxy-ui" "path:$PWD#checks.aarch64-darwin.cliproxy-ui" --no-link
+      - run: nix build "path:$PWD#fleet" "path:$PWD#checks.aarch64-darwin.fleet" "path:$PWD#cliproxy-ui" "path:$PWD#checks.aarch64-darwin.cliproxy-ui" "path:$PWD#cliproxy-quota" "path:$PWD#checks.aarch64-darwin.cliproxy-quota" --no-link

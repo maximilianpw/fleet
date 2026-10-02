@@ -11,7 +11,9 @@ source does not switch an existing host configuration.
 The repository is a monorepo. The CLI lives in `cli/`. The CLIProxy
 management UI lives in `apps/cliproxy-ui/` and is packaged as
 `packages.<system>.cliproxy-ui`, a single
-`share/cliproxy-ui/management.html`. See
+`share/cliproxy-ui/management.html`. The CLIProxy quota service lives in
+[`services/cliproxy-quota/`](services/cliproxy-quota/README.md), packaged as
+`packages.<system>.cliproxy-quota` with `nixosModules.cliproxy-quota`. See
 [docs/monorepo-migration-plan.md](docs/monorepo-migration-plan.md).
 
 ## Install
@@ -121,6 +123,7 @@ cargo test --locked
 nix build path:$PWD#fleet path:$PWD#checks.x86_64-linux.fleet path:$PWD#checks.x86_64-linux.home-manager --no-link
 alejandra --check flake.nix nix
 nix build path:$PWD#cliproxy-ui path:$PWD#checks.x86_64-linux.cliproxy-ui --no-link
+nix build path:$PWD#cliproxy-quota path:$PWD#checks.x86_64-linux.cliproxy-quota path:$PWD#checks.x86_64-linux.cliproxy-quota-nixos --no-link
 ```
 
 Supported package outputs are `x86_64-linux` and `aarch64-darwin`. The Linux
