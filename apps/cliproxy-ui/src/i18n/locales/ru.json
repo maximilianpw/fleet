@@ -98,7 +98,6 @@
   },
   "nav": {
     "dashboard": "Панель",
-    "quick_start": "Быстрый старт",
     "ai_providers": "Поставщики AI",
     "auth_files": "Файлы аутентификации",
     "oauth": "OAuth вход",
@@ -117,7 +116,6 @@
   },
   "nav_meta": {
     "dashboard": "Обзор работы",
-    "quick_start": "Настройка APIKEY.FUN",
     "ai_providers": "Маршрутизация моделей",
     "auth_files": "Файлы и учётные данные",
     "oauth": "Авторизация OAuth",
@@ -1369,7 +1367,6 @@
           "title": "Сетевые настройки",
           "description": "Параметры прокси, повторов и маршрутизации",
           "proxy_url": "URL прокси",
-          "proxy_url_sponsor_hint": "Нет подходящего прокси?",
           "request_retry": "Количество повторов запросов",
           "max_retry_credentials": "Максимум учётных данных для повторов",
           "max_retry_credentials_hint": "Оставьте пустым, чтобы не задавать поле. Значение 0 или отрицательное целое число позволяет перебрать все доступные учётные данные.",
@@ -1556,6 +1553,12 @@
     "meta_credentials": "{{count}} учётных данных",
     "meta_loaded": "{{count}} загружено",
     "meta_attention": "{{count}} требуют внимания",
+    "auto_load_on": "Автозагрузка: вкл",
+    "auto_load_off": "Автозагрузка: выкл",
+    "auto_load_hint": "Загружать квоты всех учётных данных на странице при её открытии",
+    "attention_filter_label": "Показывать только учётные данные, требующие внимания",
+    "attention_empty_title": "Ничего не требует внимания",
+    "attention_empty_desc": "У всех загруженных учётных данных есть запас квоты. Загрузите остальные или сбросьте фильтр.",
     "empty_title": "Нет учётных данных с квотами",
     "empty_desc": "Подключите учётные данные Antigravity, Claude, Codex, xAI или Kimi, чтобы отслеживать квоту здесь.",
     "windows_title": "Окна квот",
@@ -1587,8 +1590,6 @@
     "weekday_thu": "Чт",
     "weekday_fri": "Пт",
     "weekday_sat": "Сб",
-    "show_emails": "Показать email",
-    "hide_emails": "Скрыть email",
     "view_label": "Вид",
     "view_ledger": "Список",
     "view_cards": "Карточки",
@@ -1945,7 +1946,6 @@
     },
     "categories": {
       "title": "Провайдеры",
-      "quickFill": "Быстрое заполнение",
       "activeCount": "{{active}}/{{total}} активных"
     },
     "providerNames": {
@@ -1984,11 +1984,6 @@
     "sponsor": {
       "protocolSummary": "Anthropic / OpenAI / Gemini / Codex API (Responses)",
       "detailHint": "{{provider}} сохраняется в соответствующие конфигурации API key по протоколам; здесь они управляются вместе.",
-      "registerLink": "Зарегистрироваться",
-      "registerNow": "Зарегистрироваться сейчас",
-      "kimiPromo": "Новые пользователи получают API-квоту в размере 10% от первого успешного пополнения, максимум ¥1000. Предложение действует до 30 сентября.",
-      "dashboardLink": "Панель управления",
-      "emptyRegisterHint": "Конфигурации пока нет.",
       "apiKeyHint": "Этот ключ записывается только в выбранную группу/протокол.",
       "usageCheck": "Проверить квоту",
       "usageChecking": "Проверка",

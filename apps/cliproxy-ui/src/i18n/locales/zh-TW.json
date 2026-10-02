@@ -98,7 +98,6 @@
   },
   "nav": {
     "dashboard": "儀表板",
-    "quick_start": "快速開始",
     "ai_providers": "AI 供應商",
     "auth_files": "驗證檔案",
     "oauth": "OAuth 登入",
@@ -118,7 +117,6 @@
   },
   "nav_meta": {
     "dashboard": "運行總覽",
-    "quick_start": "APIKEY.FUN 快速設定",
     "ai_providers": "上游模型路由",
     "auth_files": "Auth 檔案與憑證",
     "oauth": "OAuth 授權登入",
@@ -1390,7 +1388,6 @@
           "title": "網路設定",
           "description": "代理、重試和路由設定",
           "proxy_url": "代理 URL",
-          "proxy_url_sponsor_hint": "沒有合適的代理？",
           "request_retry": "請求重試次數",
           "max_retry_credentials": "最大重試憑證數",
           "max_retry_credentials_hint": "留空表示不設定；設為 0 或負整數表示嘗試所有可用憑證。",
@@ -1577,6 +1574,12 @@
     "meta_credentials": "{{count}} 個憑證",
     "meta_loaded": "{{count}} 個已載入",
     "meta_attention": "{{count}} 個需關注",
+    "auto_load_on": "自動載入：開",
+    "auto_load_off": "自動載入：關",
+    "auto_load_hint": "開啟頁面時自動載入本頁所有憑證的額度",
+    "attention_filter_label": "僅顯示需要關注的憑證",
+    "attention_empty_title": "沒有需要關注的憑證",
+    "attention_empty_desc": "已載入的憑證額度都還充足。載入其餘憑證或清除篩選。",
     "empty_title": "暫無可查配額的憑證",
     "empty_desc": "接入 Antigravity、Claude、Codex、xAI 或 Kimi 憑證後即可在此查看配額。",
     "windows_title": "配額視窗",
@@ -1608,8 +1611,6 @@
     "weekday_thu": "四",
     "weekday_fri": "五",
     "weekday_sat": "六",
-    "show_emails": "顯示信箱",
-    "hide_emails": "隱藏信箱",
     "view_label": "版面",
     "view_ledger": "列表",
     "view_cards": "卡片",
@@ -1972,7 +1973,6 @@
     },
     "categories": {
       "title": "提供商",
-      "quickFill": "快速接入",
       "activeCount": "{{active}}/{{total}} 活躍"
     },
     "providerNames": {
@@ -2011,11 +2011,6 @@
     "sponsor": {
       "protocolSummary": "Anthropic / OpenAI / Gemini / Codex API (Responses)",
       "detailHint": "{{provider}} 會按協議分別寫入對應的 API Key 設定,此處只做聚合管理。",
-      "registerLink": "點此註冊",
-      "registerNow": "立即註冊",
-      "kimiPromo": "新用戶首次成功儲值，贈送儲值金額 10% 的 API 額度，最高贈送 ¥1000，優惠截至 9 月 30 日",
-      "dashboardLink": "控制面板",
-      "emptyRegisterHint": "尚未新增設定",
       "apiKeyHint": "此金鑰只會寫入目前選擇的分組/協議設定。",
       "usageCheck": "查詢額度",
       "usageChecking": "查詢中",

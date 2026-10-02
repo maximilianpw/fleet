@@ -7,9 +7,11 @@ import {
   filterEntriesByTab,
   filterEntriesBySearch,
   isQuotaRefreshDisabled,
+  needsAttention,
   paginate,
   resolveQuotaProviderType,
   sortQuotaEntries,
+  visibleQuotaTabs,
   type QuotaFileEntry,
 } from '@/features/quota/logic';
 import type { AuthFileItem } from '@/types';
@@ -249,5 +251,27 @@ describe('sortQuotaEntries', () => {
     const last = entries[entries.length - 1].file.name;
     const sorted = sortQuotaEntries(entries, 'soonest', resolver({ [last]: 1 }));
     expect(paginate(sorted, 1, 2).pageItems[0].file.name).toBe(last);
+  });
+});
+
+describe('needsAttention', () => {
+  test('flags failed loads and nearly exhausted limits only', () => {
+    expect(needsAttention('error', [])).toBe(true);
+    expect(needsAttention('success', [{ remaining: 10 }])).toBe(true);
+    expect(needsAttention('success', [{ remaining: 11 }, { remaining: null }])).toBe(false);
+  });
+
+  test('never flags credentials that have not been loaded', () => {
+    expect(needsAttention(undefined, [])).toBe(false);
+    expect(needsAttention('idle', [{ remaining: 0 }])).toBe(false);
+    expect(needsAttention('loading', [{ remaining: 0 }])).toBe(false);
+  });
+});
+
+describe('visibleQuotaTabs', () => {
+  test('hides providers without credentials but keeps the active tab', () => {
+    const counts = { all: 3, claude: 2, codex: 1, antigravity: 0, devin: 0 };
+    expect(visibleQuotaTabs(counts, 'all')).toEqual(['all', 'claude', 'codex']);
+    expect(visibleQuotaTabs(counts, 'devin')).toEqual(['all', 'claude', 'codex', 'devin']);
   });
 });

@@ -72,6 +72,34 @@
   color: var(--viz-failure);
 }
 
+/* The attention count doubles as a filter toggle; it reads as text until pressed. */
+.metaAttentionButton {
+  appearance: none;
+  border: 0;
+  padding: 0 2px;
+  margin: 0 -2px;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+
+  &:hover {
+    text-decoration-style: solid;
+  }
+
+  &[aria-pressed='true'] {
+    background: color-mix(in srgb, var(--viz-failure) 14%, transparent);
+    text-decoration-style: solid;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+  }
+}
+
 /* ---------- 动作区 ---------- */
 
 .actions {

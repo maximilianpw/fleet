@@ -12,7 +12,12 @@ import { KIMI_CONFIG } from './providers/kimi/data';
 import { META_CONFIG } from './providers/meta/data';
 import { XAI_CONFIG } from './providers/xai/data';
 import type { QuotaProviderType } from './providers/types';
-import { QUOTA_TAB_ORDER, type QuotaSortMode, type QuotaTabId } from './constants';
+import {
+  ATTENTION_REMAINING_PERCENT,
+  QUOTA_TAB_ORDER,
+  type QuotaSortMode,
+  type QuotaTabId,
+} from './constants';
 
 const QUOTA_FILTER_MAP: Record<QuotaProviderType, (file: AuthFileItem) => boolean> = {
   antigravity: ANTIGRAVITY_CONFIG.filterFn,
@@ -121,6 +126,31 @@ export function buildTabCounts(entries: QuotaFileEntry[]): Record<string, number
     counts[entry.type] += 1;
   }
   return counts;
+}
+
+/**
+ * A credential needs attention when its quota failed to load or any loaded
+ * limit is nearly exhausted. Unloaded credentials are not flagged: silence is
+ * not a problem, and flagging them would make the filter useless before the
+ * first load.
+ */
+export function needsAttention(
+  status: string | undefined,
+  limits: readonly { remaining: number | null }[]
+): boolean {
+  if (status === 'error') return true;
+  if (status !== 'success') return false;
+  return limits.some(
+    (limit) => limit.remaining !== null && limit.remaining <= ATTENTION_REMAINING_PERCENT
+  );
+}
+
+/**
+ * Tabs worth showing: providers with at least one credential, plus the active
+ * tab so a selection never disappears from under the user.
+ */
+export function visibleQuotaTabs(counts: Record<string, number>, active: QuotaTabId): string[] {
+  return ['all', ...QUOTA_TAB_ORDER.filter((type) => (counts[type] ?? 0) > 0 || type === active)];
 }
 
 export const isQuotaRefreshDisabled = (

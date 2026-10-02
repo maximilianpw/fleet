@@ -372,6 +372,44 @@ describe('buildTimelineLane', () => {
     ]);
   });
 
+  test('kimi: carries translation keys so the lane can label rows the backend left unnamed', () => {
+    const lane = buildTimelineLane({
+      ...base,
+      provider: 'kimi',
+      quota: {
+        status: 'success',
+        rows: [
+          {
+            labelKey: 'kimi_quota.limit_window',
+            labelParams: { duration: '5h' },
+            used: 0,
+            limit: 100,
+            resetAtMs: 5000,
+            periodHours: 5,
+          },
+          {
+            labelKey: 'kimi_quota.weekly_limit',
+            used: 0,
+            limit: 100,
+            resetAtMs: 9000,
+            periodHours: 168,
+          },
+        ],
+      },
+      maxPeriodHours: 14 * 24,
+    });
+
+    expect(lane.limits).toEqual([
+      {
+        label: '',
+        labelKey: 'kimi_quota.limit_window',
+        labelParams: { duration: '5h' },
+        remaining: 100,
+      },
+      { label: '', labelKey: 'kimi_quota.weekly_limit', remaining: 100 },
+    ]);
+  });
+
   test('antigravity anchors on its bucket reset, with remaining from the fraction', () => {
     const lane = buildTimelineLane({
       ...base,

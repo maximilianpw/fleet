@@ -7,10 +7,13 @@ export type QuotaHeaderProps = {
   totalCount: number;
   loadedCount: number;
   attentionCount: number;
+  /** Whether the list is narrowed to credentials that need attention. */
+  attentionActive: boolean;
+  onToggleAttention: () => void;
+  autoLoad: boolean;
+  onToggleAutoLoad: () => void;
   refreshing: boolean;
   disableControls: boolean;
-  showEmails: boolean;
-  onToggleEmails: () => void;
   onRefreshAll: () => void;
 };
 
@@ -26,15 +29,18 @@ export function QuotaHeader(props: QuotaHeaderProps) {
     totalCount,
     loadedCount,
     attentionCount,
+    attentionActive,
+    onToggleAttention,
+    autoLoad,
+    onToggleAutoLoad,
     refreshing,
     disableControls,
-    showEmails,
-    onToggleEmails,
     onRefreshAll,
   } = props;
   const { t } = useTranslation();
   // 批量结果陆续落地时，「已加载」是页面上唯一滚动的数字
   const displayLoadedCount = useCountUp(loadedCount);
+  const showAttention = attentionCount > 0 || attentionActive;
 
   return (
     <header className={styles.header}>
@@ -52,14 +58,20 @@ export function QuotaHeader(props: QuotaHeaderProps) {
           <span className={loadedCount > 0 ? styles.metaLoaded : styles.metaMuted}>
             {t('quota_management.meta_loaded', { count: displayLoadedCount })}
           </span>
-          {attentionCount > 0 && (
+          {showAttention && (
             <>
               <span className={styles.metaDot} aria-hidden="true">
                 ·
               </span>
-              <span className={styles.metaAttention}>
+              <button
+                type="button"
+                className={`${styles.metaAttention} ${styles.metaAttentionButton}`}
+                onClick={onToggleAttention}
+                aria-pressed={attentionActive}
+                title={t('quota_management.attention_filter_label')}
+              >
                 {t('quota_management.meta_attention', { count: attentionCount })}
-              </span>
+              </button>
             </>
           )}
         </p>
@@ -68,10 +80,11 @@ export function QuotaHeader(props: QuotaHeaderProps) {
         <button
           type="button"
           className={styles.secondaryAction}
-          onClick={onToggleEmails}
-          aria-pressed={showEmails}
+          onClick={onToggleAutoLoad}
+          aria-pressed={autoLoad}
+          title={t('quota_management.auto_load_hint')}
         >
-          {showEmails ? t('quota_management.hide_emails') : t('quota_management.show_emails')}
+          {autoLoad ? t('quota_management.auto_load_on') : t('quota_management.auto_load_off')}
         </button>
         <button
           type="button"

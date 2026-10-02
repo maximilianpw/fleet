@@ -353,9 +353,13 @@ function Lane({ lane, span, now, mode, cells, nowPercent, resolvedTheme }: LaneP
           {periodLabel && <span className={styles.lanePeriod}>{periodLabel}</span>}
         </div>
         <div className={styles.laneLimits}>
-          {lane.limits.map((limit) => (
-            <span key={limit.label} className={styles.laneLimit}>
-              {lane.provider === 'meta' ? t(limit.label) : limit.label}{' '}
+          {lane.limits.map((limit, index) => (
+            <span key={`${limit.labelKey ?? limit.label}:${index}`} className={styles.laneLimit}>
+              {limit.labelKey
+                ? t(limit.labelKey, limit.labelParams)
+                : lane.provider === 'meta'
+                  ? t(limit.label)
+                  : limit.label}{' '}
               <b>{limit.remaining}%</b>
             </span>
           ))}

@@ -2,7 +2,7 @@
  * 额度查询页：提供商 tabs + 统一卡网格。
  *
  * 保留的行为契约（重设计不改）：
- * - 现有提供商保持点击加载；Devin 首次可见时主动查询一次，不轮询；
+ * - 自动加载开启时，本页可见凭证首次出现即查询一次，不轮询；关闭时仅 Devin 自动查询；
  * - cacheGeneration 会话隔离 + request-id 去重（见 useQuotaBatchLoader）；
  * - 文件列表变化后按 provider 剪枝额度缓存（已删文件不残留）；
  * - useHeaderRefresh 单槽位：本页唯一注册者，全局刷新 = 重取文件列表。
@@ -17,6 +17,7 @@ import { IconSearch, IconX } from '@/components/ui/icons';
 import { Select } from '@/components/ui/Select';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
+import { useLocalStorage } from '@/hooks/useLocalStorage';
 import { useNow } from '@/hooks/useNow';
 import { useRevealGroup } from '@/hooks/motion';
 import { useAuthStore, useQuotaStore, useThemeStore } from '@/stores';
@@ -31,6 +32,7 @@ import { QuotaLedger } from './components/QuotaLedger';
 import { QuotaSummary } from './components/QuotaSummary';
 import {
   CARD_ENTRANCE_BUDGET_MS,
+  QUOTA_AUTO_LOAD_STORAGE_KEY,
   QUOTA_PAGE_SIZE,
   QUOTA_SORT_MODES,
   QUOTA_TAB_ORDER,
@@ -39,33 +41,32 @@ import {
   type QuotaTabId,
   type QuotaViewMode,
 } from './constants';
-import {
-  buildLedgerCredential,
-  buildLedgerRollup,
-  maskIdentity,
-  type LedgerCredential,
-} from './ledgerModel';
+import { buildLedgerCredential, buildLedgerRollup, type LedgerCredential } from './ledgerModel';
 import {
   buildTabCounts,
   canRefreshQuotaAfterList,
   classifyQuotaFiles,
   filterEntriesByTab,
   filterEntriesBySearch,
+  needsAttention,
   paginate,
   sortQuotaEntries,
+  visibleQuotaTabs,
   type QuotaFileEntry,
 } from './logic';
 import { nextRecoveryMs } from './resetSchedule';
 import { QUOTA_ADAPTERS, getQuotaSetter, type QuotaCardState } from './providers';
 import type { QuotaProviderType } from './providers/types';
-import { useDevinQuotaAutoLoad } from './providers/devin/useDevinQuotaAutoLoad';
 import { useQuotaActions } from './hooks/useQuotaActions';
+import { useQuotaAutoLoad } from './hooks/useQuotaAutoLoad';
 import { useQuotaBatchLoader } from './hooks/useQuotaBatchLoader';
 import { readQuotaUiState, writeQuotaUiState } from './uiState';
 import styles from './QuotaPage.module.scss';
 
-const TAB_IDS: string[] = ['all', ...QUOTA_TAB_ORDER];
 const SKELETON_CARD_COUNT = 6;
+/** Devin keeps its upstream contract of loading on sight even with auto-load off. */
+const ALWAYS_AUTO_LOAD: ReadonlySet<QuotaProviderType> = new Set(['devin']);
+const ALL_PROVIDERS: ReadonlySet<QuotaProviderType> = new Set(QUOTA_TAB_ORDER);
 const SKELETON_ROW_COUNT = 4;
 
 export function QuotaPage() {
@@ -83,10 +84,10 @@ export function QuotaPage() {
   const [viewMode, setViewMode] = useState<QuotaViewMode>(
     () => readQuotaUiState()?.viewMode ?? 'ledger'
   );
-  // Emails are hidden by default so the page can be screen-shared safely.
-  const [showEmails, setShowEmails] = useState<boolean>(
-    () => readQuotaUiState()?.showEmails ?? false
-  );
+  const [autoLoad, setAutoLoad] = useLocalStorage<boolean>(QUOTA_AUTO_LOAD_STORAGE_KEY, true);
+  // Narrow to failed or nearly exhausted credentials. Not persisted: it is a
+  // triage gesture, not a way of looking at the page.
+  const [attentionOnly, setAttentionOnly] = useState(false);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -176,10 +177,39 @@ export function QuotaPage() {
 
   const entries = useMemo(() => classifyQuotaFiles(files), [files]);
   const tabCounts = useMemo(() => buildTabCounts(entries), [entries]);
-  const filteredEntries = useMemo(
-    () => filterEntriesBySearch(filterEntriesByTab(entries, tab), search),
-    [entries, tab, search]
+  const tabIds = useMemo(() => visibleQuotaTabs(tabCounts, tab), [tabCounts, tab]);
+
+  /* ---------- ledger + summary ---------- */
+
+  const ledgerNow = useNow();
+  const ledgerByKey = useMemo(() => {
+    const map = new Map<string, LedgerCredential>();
+    entries.forEach((entry) => {
+      map.set(
+        `${entry.type}:${getQuotaCacheKey(entry.file)}`,
+        buildLedgerCredential(entry.type, getQuota(entry), t)
+      );
+    });
+    return map;
+  }, [entries, getQuota, t]);
+  const ledgerFor = useCallback(
+    (entry: QuotaFileEntry): LedgerCredential =>
+      ledgerByKey.get(`${entry.type}:${getQuotaCacheKey(entry.file)}`) ?? {
+        plan: null,
+        limits: [],
+      },
+    [ledgerByKey]
   );
+
+  const isAttention = useCallback(
+    (entry: QuotaFileEntry) => needsAttention(getQuota(entry)?.status, ledgerFor(entry).limits),
+    [getQuota, ledgerFor]
+  );
+
+  const filteredEntries = useMemo(() => {
+    const scoped = filterEntriesBySearch(filterEntriesByTab(entries, tab), search);
+    return attentionOnly ? scoped.filter(isAttention) : scoped;
+  }, [entries, tab, search, attentionOnly, isAttention]);
   const handleSearchChange = useCallback((value: string) => {
     setSearch(value);
     setPage(1);
@@ -217,48 +247,24 @@ export function QuotaPage() {
     writeQuotaUiState({ viewMode: next as QuotaViewMode });
   }, []);
 
-  const handleToggleEmails = useCallback(() => {
-    setShowEmails((value) => {
-      writeQuotaUiState({ showEmails: !value });
-      return !value;
-    });
+  const handleToggleAutoLoad = useCallback(() => {
+    setAutoLoad((value) => !value);
+  }, [setAutoLoad]);
+
+  const handleToggleAttention = useCallback(() => {
+    setAttentionOnly((value) => !value);
+    setPage(1);
   }, []);
 
-  /** Devin's label carries its identity; masking applies to every provider alike. */
   const displayNameFor = useCallback(
-    (entry: QuotaFileEntry) => {
-      const name = getQuotaDisplayName(entry.file);
-      return showEmails ? name : maskIdentity(name, entry.type);
-    },
-    [showEmails]
+    (entry: QuotaFileEntry) => getQuotaDisplayName(entry.file),
+    []
   );
 
   const viewOptions = useMemo(
     () =>
       QUOTA_VIEW_MODES.map((mode) => ({ value: mode, label: t(`quota_management.view_${mode}`) })),
     [t]
-  );
-
-  /* ---------- ledger + summary ---------- */
-
-  const ledgerNow = useNow();
-  const ledgerByKey = useMemo(() => {
-    const map = new Map<string, LedgerCredential>();
-    entries.forEach((entry) => {
-      map.set(
-        `${entry.type}:${getQuotaCacheKey(entry.file)}`,
-        buildLedgerCredential(entry.type, getQuota(entry), t)
-      );
-    });
-    return map;
-  }, [entries, getQuota, t]);
-  const ledgerFor = useCallback(
-    (entry: QuotaFileEntry): LedgerCredential =>
-      ledgerByKey.get(`${entry.type}:${getQuotaCacheKey(entry.file)}`) ?? {
-        plan: null,
-        limits: [],
-      },
-    [ledgerByKey]
   );
 
   // Summaries follow the tab and search, but not pagination: a total that
@@ -284,12 +290,11 @@ export function QuotaPage() {
     let loaded = 0;
     let attention = 0;
     entries.forEach((entry) => {
-      const status = quotaByType[entry.type][getQuotaCacheKey(entry.file)]?.status;
-      if (status === 'success') loaded += 1;
-      else if (status === 'error') attention += 1;
+      if (getQuota(entry)?.status === 'success') loaded += 1;
+      if (isAttention(entry)) attention += 1;
     });
     return { loadedCount: loaded, attentionCount: attention };
-  }, [entries, quotaByType]);
+  }, [entries, getQuota, isAttention]);
 
   // 剪枝：文件列表落定后，各 provider 缓存只保留仍存在的凭证
   useEffect(() => {
@@ -353,14 +358,15 @@ export function QuotaPage() {
     }
   }, [disableControls, error, filesGeneration, loading, loadQuota, pageItems, sessionGeneration]);
 
-  useDevinQuotaAutoLoad(
+  useQuotaAutoLoad(
     pageItems,
     disableControls ||
       loading ||
       batchLoading ||
       Boolean(error) ||
       filesGeneration !== sessionGeneration,
-    loadQuota
+    loadQuota,
+    autoLoad ? ALL_PROVIDERS : ALWAYS_AUTO_LOAD
   );
 
   const canUseActions = !disableControls && !loading && filesGeneration === sessionGeneration;
@@ -393,10 +399,12 @@ export function QuotaPage() {
         totalCount={entries.length}
         loadedCount={loadedCount}
         attentionCount={attentionCount}
+        attentionActive={attentionOnly}
+        onToggleAttention={handleToggleAttention}
+        autoLoad={autoLoad}
+        onToggleAutoLoad={handleToggleAutoLoad}
         refreshing={loading || batchLoading}
         disableControls={disableControls}
-        showEmails={showEmails}
-        onToggleEmails={handleToggleEmails}
         onRefreshAll={handleRefreshAll}
       />
 
@@ -405,7 +413,7 @@ export function QuotaPage() {
         <div className={styles.tabsRow} data-reveal>
           <div className={styles.providerTabs}>
             <ProviderTabs
-              types={TAB_IDS}
+              types={tabIds}
               counts={tabCounts}
               active={tab}
               resolvedTheme={resolvedTheme}
@@ -418,7 +426,7 @@ export function QuotaPage() {
             value={tab}
             onChange={(event) => handleTabChange(event.target.value)}
           >
-            {TAB_IDS.map((type) => (
+            {tabIds.map((type) => (
               <option key={type} value={type}>
                 {type === 'all' ? t('auth_files.filter_all') : getTypeLabel(t, type)} (
                 {tabCounts[type] ?? 0})
@@ -499,21 +507,29 @@ export function QuotaPage() {
         ) : isEmpty ? (
           <EmptyState
             title={
-              search.trim()
-                ? t('quota_management.search_empty_title')
-                : tab === 'all'
-                  ? t('quota_management.empty_title')
-                  : t(`${QUOTA_ADAPTERS[tab].i18nPrefix}.empty_title`)
+              attentionOnly
+                ? t('quota_management.attention_empty_title')
+                : search.trim()
+                  ? t('quota_management.search_empty_title')
+                  : tab === 'all'
+                    ? t('quota_management.empty_title')
+                    : t(`${QUOTA_ADAPTERS[tab].i18nPrefix}.empty_title`)
             }
             description={
-              search.trim()
-                ? t('quota_management.search_empty_desc')
-                : tab === 'all'
-                  ? t('quota_management.empty_desc')
-                  : t(`${QUOTA_ADAPTERS[tab].i18nPrefix}.empty_desc`)
+              attentionOnly
+                ? t('quota_management.attention_empty_desc')
+                : search.trim()
+                  ? t('quota_management.search_empty_desc')
+                  : tab === 'all'
+                    ? t('quota_management.empty_desc')
+                    : t(`${QUOTA_ADAPTERS[tab].i18nPrefix}.empty_desc`)
             }
             action={
-              search.trim() ? (
+              attentionOnly ? (
+                <Button variant="secondary" size="sm" onClick={handleToggleAttention}>
+                  {t('quota_management.search_clear')}
+                </Button>
+              ) : search.trim() ? (
                 <Button variant="secondary" size="sm" onClick={() => handleSearchChange('')}>
                   {t('quota_management.search_clear')}
                 </Button>
@@ -530,7 +546,6 @@ export function QuotaPage() {
             quotaFor={getQuota}
             ledgerFor={ledgerFor}
             grouped={sortMode === 'default'}
-            showEmails={showEmails}
             resolvedTheme={resolvedTheme}
             now={ledgerNow}
             canUseActions={canUseActions}

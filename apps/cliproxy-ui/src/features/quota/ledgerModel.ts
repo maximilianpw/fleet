@@ -282,25 +282,3 @@ export function buildLedgerRollup(
     secondary: limits.filter((limit) => limit !== primary && limit.capacity > 0),
   };
 }
-
-/* ---------------------------------------------------------------- privacy */
-
-const EMAIL_PATTERN = /([A-Za-z0-9._%+-]+)@([A-Za-z0-9-]+)((?:\.[A-Za-z0-9-]+)+)/g;
-
-/**
- * Mask email addresses in a credential label: `claude-team@lumen.dev.json` →
- * `claude-t•••@l•••.dev.json`. A leading `<provider>-` prefix is kept, since
- * credential files are conventionally named after their provider.
- */
-export function maskIdentity(text: string, provider?: string): string {
-  const prefix = provider && text.toLowerCase().startsWith(`${provider}-`) ? `${provider}-` : '';
-  const rest = text.slice(prefix.length);
-  return (
-    prefix +
-    rest.replace(
-      EMAIL_PATTERN,
-      (_match, local: string, domain: string, suffix: string) =>
-        `${local.slice(0, 1)}•••@${domain.slice(0, 1)}•••${suffix}`
-    )
-  );
-}

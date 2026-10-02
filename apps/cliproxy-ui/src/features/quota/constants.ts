@@ -13,6 +13,12 @@ export const QUOTA_TAB_ORDER: readonly QuotaProviderType[] = [
 
 export type QuotaTabId = 'all' | QuotaProviderType;
 
+/** A loaded limit at or below this remaining percent counts as needing attention. */
+export const ATTENTION_REMAINING_PERCENT = 10;
+
+/** Auto-load preference; persisted across sessions so the page opens the way it was left. */
+export const QUOTA_AUTO_LOAD_STORAGE_KEY = 'quotaPage.autoLoad';
+
 /** 页级分页固定 20/页，同时把「刷新全部」的上游并发限制在 20。 */
 export const QUOTA_PAGE_SIZE = 20;
 

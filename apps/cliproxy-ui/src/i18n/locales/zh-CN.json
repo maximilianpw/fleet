@@ -98,7 +98,6 @@
   },
   "nav": {
     "dashboard": "仪表盘",
-    "quick_start": "快速开始",
     "ai_providers": "AI 提供商",
     "auth_files": "认证文件",
     "oauth": "OAuth 登录",
@@ -118,7 +117,6 @@
   },
   "nav_meta": {
     "dashboard": "运行总览",
-    "quick_start": "快速配置",
     "ai_providers": "上游模型路由",
     "auth_files": "Auth 文件与凭证",
     "oauth": "OAuth 授权登录",
@@ -1364,7 +1362,6 @@
           "title": "网络配置",
           "description": "代理、重试和路由设置",
           "proxy_url": "代理 URL",
-          "proxy_url_sponsor_hint": "没有合适的代理？",
           "request_retry": "请求重试次数",
           "max_retry_credentials": "最大重试凭据数",
           "max_retry_credentials_hint": "留空表示不设置；设为 0 或负整数表示尝试所有可用凭据。",
@@ -1551,6 +1548,12 @@
     "meta_credentials": "{{count}} 个凭证",
     "meta_loaded": "{{count}} 个已加载",
     "meta_attention": "{{count}} 个需关注",
+    "auto_load_on": "自动加载：开",
+    "auto_load_off": "自动加载：关",
+    "auto_load_hint": "打开页面时自动加载本页所有凭证的额度",
+    "attention_filter_label": "仅显示需要关注的凭证",
+    "attention_empty_title": "没有需要关注的凭证",
+    "attention_empty_desc": "已加载的凭证额度都还充足。加载其余凭证或清除筛选。",
     "empty_title": "暂无可查额度的凭证",
     "empty_desc": "接入 Antigravity、Claude、Codex、xAI 或 Kimi 凭证后即可在此查看额度。",
     "windows_title": "配额窗口",
@@ -1582,8 +1585,6 @@
     "weekday_thu": "四",
     "weekday_fri": "五",
     "weekday_sat": "六",
-    "show_emails": "显示邮箱",
-    "hide_emails": "隐藏邮箱",
     "view_label": "布局",
     "view_ledger": "列表",
     "view_cards": "卡片",
@@ -1946,7 +1947,6 @@
     },
     "categories": {
       "title": "提供商",
-      "quickFill": "快速接入",
       "activeCount": "{{active}}/{{total}} 活跃"
     },
     "providerNames": {
@@ -1985,11 +1985,6 @@
     "sponsor": {
       "protocolSummary": "Anthropic / OpenAI / Gemini / Codex API (Responses)",
       "detailHint": "{{provider}} 会按协议分别写入对应的 API Key 配置,这里只做聚合管理。",
-      "registerLink": "点此注册",
-      "registerNow": "立即注册",
-      "kimiPromo": "新用户首次成功充值，赠送充值金额 10% 的 API 额度，最高赠送 ¥1000，优惠截至 9 月 30 日",
-      "dashboardLink": "控制面板",
-      "emptyRegisterHint": "尚未添加配置",
       "apiKeyHint": "此 Key 只会写入当前选择的分组/协议配置。",
       "usageCheck": "查询额度",
       "usageChecking": "查询中",

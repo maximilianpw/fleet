@@ -17,7 +17,7 @@ import { QUOTA_ADAPTERS, type QuotaCardState } from '../providers';
 import type { QuotaProviderType } from '../providers/types';
 import { useClaudeResetGrants } from '../providers/claude/ClaudeResetGrants';
 import { isQuotaRefreshDisabled, type QuotaFileEntry } from '../logic';
-import { maskIdentity, quotaLevel, type LedgerCredential, type LedgerLimit } from '../ledgerModel';
+import { quotaLevel, type LedgerCredential, type LedgerLimit } from '../ledgerModel';
 import { LedgerReset } from './ledgerParts';
 import { QuotaProviderIcon } from './QuotaProviderIcon';
 import styles from './QuotaLedger.module.scss';
@@ -31,7 +31,6 @@ export type QuotaLedgerProps = {
   ledgerFor: (entry: QuotaFileEntry) => LedgerCredential;
   /** Group rows under provider headings; off when rows are sorted across providers. */
   grouped: boolean;
-  showEmails: boolean;
   resolvedTheme: ResolvedTheme;
   now: number;
   canUseActions: boolean;
@@ -114,7 +113,6 @@ function LedgerRow(props: LedgerRowProps) {
     quotaFor,
     ledgerFor,
     grouped,
-    showEmails,
     resolvedTheme,
     now,
     canUseActions,
@@ -147,8 +145,7 @@ function LedgerRow(props: LedgerRowProps) {
   // the button is permanently disabled noise on every row.
   const showClaudeReset = entry.type === 'claude' && (!claudeReset.blocked || claudeReset.busy);
 
-  const rawName = getQuotaDisplayName(entry.file);
-  const displayName = showEmails ? rawName : maskIdentity(rawName, entry.type);
+  const displayName = getQuotaDisplayName(entry.file);
   const subtitle = ledger.plan ?? (grouped ? null : getTypeLabel(t, entry.type));
 
   const byKey = new Map(ledger.limits.map((limit) => [limit.key, limit]));
@@ -167,7 +164,7 @@ function LedgerRow(props: LedgerRowProps) {
           />
         )}
         <div className={styles.identityText}>
-          <span className={styles.fileName} title={showEmails ? rawName : undefined}>
+          <span className={styles.fileName} title={displayName}>
             {displayName}
           </span>
           {subtitle && <span className={styles.plan}>{subtitle}</span>}

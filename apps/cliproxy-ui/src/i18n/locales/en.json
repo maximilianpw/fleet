@@ -98,7 +98,6 @@
   },
   "nav": {
     "dashboard": "Dashboard",
-    "quick_start": "Quick Start",
     "ai_providers": "AI Providers",
     "auth_files": "Auth Files",
     "oauth": "OAuth Login",
@@ -118,7 +117,6 @@
   },
   "nav_meta": {
     "dashboard": "Operations overview",
-    "quick_start": "APIKEY.FUN setup",
     "ai_providers": "Upstream model routing",
     "auth_files": "Auth files & credentials",
     "oauth": "OAuth authorization",
@@ -1366,7 +1364,6 @@
           "title": "Network Configuration",
           "description": "Proxy, retry, and routing settings",
           "proxy_url": "Proxy URL",
-          "proxy_url_sponsor_hint": "No suitable proxy?",
           "request_retry": "Request Retry Count",
           "max_retry_credentials": "Max Retry Credentials",
           "max_retry_credentials_hint": "Leave empty to keep it unset. Set to 0 or a negative integer to try all available credentials.",
@@ -1553,6 +1550,12 @@
     "meta_credentials": "{{count}} credentials",
     "meta_loaded": "{{count}} loaded",
     "meta_attention": "{{count}} need attention",
+    "auto_load_on": "Auto-load on",
+    "auto_load_off": "Auto-load off",
+    "auto_load_hint": "Load quota for every credential on the page when it opens",
+    "attention_filter_label": "Show only credentials that need attention",
+    "attention_empty_title": "Nothing needs attention",
+    "attention_empty_desc": "Every loaded credential has quota to spare. Load the rest or clear the filter.",
     "empty_title": "No quota-capable credentials",
     "empty_desc": "Connect an Antigravity, Claude, Codex, xAI, or Kimi credential to track its quota here.",
     "windows_title": "Quota windows",
@@ -1584,8 +1587,6 @@
     "weekday_thu": "Thu",
     "weekday_fri": "Fri",
     "weekday_sat": "Sat",
-    "show_emails": "Show emails",
-    "hide_emails": "Hide emails",
     "view_label": "Layout",
     "view_ledger": "Ledger",
     "view_cards": "Cards",
@@ -1949,7 +1950,6 @@
     },
     "categories": {
       "title": "Providers",
-      "quickFill": "Quick Fill",
       "activeCount": "{{active}}/{{total}} active"
     },
     "providerNames": {
@@ -1988,11 +1988,6 @@
     "sponsor": {
       "protocolSummary": "Anthropic / OpenAI / Gemini / Codex API (Responses)",
       "detailHint": "{{provider}} is persisted into the matching API key configs by protocol; this view manages them together.",
-      "registerLink": "Register here",
-      "registerNow": "Register now",
-      "kimiPromo": "New users get API credit worth 10% of their first successful top-up, up to ¥1000. Offer ends September 30.",
-      "dashboardLink": "Dashboard",
-      "emptyRegisterHint": "No configuration yet.",
       "apiKeyHint": "This key is only written to the selected group/protocol config.",
       "usageCheck": "Check usage",
       "usageChecking": "Checking",

@@ -4,26 +4,12 @@ import {
   averageQuotaRemaining,
   buildLedgerCredential,
   buildLedgerRollup,
-  maskIdentity,
   type LedgerCredential,
 } from '@/features/quota/ledgerModel';
 
 const t = ((key: string) => key) as unknown as TFunction;
 const now = Date.parse('2099-01-01T00:00:00Z');
 const hours = (value: number) => now + value * 3_600_000;
-
-describe('maskIdentity', () => {
-  test('keeps the provider prefix and the email suffix', () => {
-    expect(maskIdentity('claude-team@lumen.example.json', 'claude')).toBe(
-      'claude-t•••@l•••.example.json'
-    );
-  });
-
-  test('masks emails without a provider prefix and leaves other text alone', () => {
-    expect(maskIdentity('ops@north.example', 'codex')).toBe('o•••@n•••.example');
-    expect(maskIdentity('vertex-project.json', 'vertex')).toBe('vertex-project.json');
-  });
-});
 
 describe('buildLedgerCredential', () => {
   test('reduces Claude windows to remaining percent with reset instants', () => {

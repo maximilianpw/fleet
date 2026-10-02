@@ -29,6 +29,9 @@ const SESSION_PERIOD_HOURS = 5;
 /** A limit summarized in the lane's left column. */
 export interface TimelineLimit {
   label: string;
+  /** Translation key that wins over `label` when present. */
+  labelKey?: string;
+  labelParams?: Record<string, string | number>;
   /** Remaining percent, 0..100. */
   remaining: number;
 }
@@ -285,6 +288,7 @@ interface ResetCreditLike {
 interface KimiRowLike {
   label?: string;
   labelKey?: string;
+  labelParams?: Record<string, string | number>;
   used: number;
   limit: number;
   resetAtMs?: number | null;
@@ -520,7 +524,11 @@ export function buildTimelineLane(input: TimelineLaneInput): TimelineLane {
       periodHours: chosen.periodHours ?? null,
       remaining: remainingOf(chosen),
       limits: rows
-        .map((row) => ({ label: row.label ?? '', remaining: remainingOf(row) }))
+        .map((row) => ({
+          label: row.label ?? '',
+          ...(row.labelKey ? { labelKey: row.labelKey, labelParams: row.labelParams } : {}),
+          remaining: remainingOf(row),
+        }))
         .filter((limit): limit is TimelineLimit => limit.remaining !== null),
     };
   }

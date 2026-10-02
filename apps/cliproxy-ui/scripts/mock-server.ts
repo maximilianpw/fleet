@@ -21,6 +21,14 @@ const creds: Cred[] = [
   { name: 'kimi-coder@lumen.example.json', type: 'kimi', email: 'coder@lumen.example' },
 ];
 
+// 20 ten-minute buckets of request counts so the dashboard and status bars have something to draw.
+const recentRequests = (seed: number) =>
+  Array.from({ length: 20 }, (_, b) => ({
+    time: new Date(now - (19 - b) * 600_000).toISOString(),
+    success: Math.max(0, Math.round(6 + 5 * Math.sin((b + seed) / 2.5)) + ((seed * 7 + b) % 4)),
+    failed: (b + seed) % 7 === 0 ? 1 + (seed % 2) : 0,
+  }));
+
 const files = creds.map((c, i) => ({
   name: c.name,
   type: c.type,
@@ -33,6 +41,7 @@ const files = creds.map((c, i) => ({
   modified: now - i * 86400_000,
   success: 120 + i * 37,
   failed: i % 3,
+  recent_requests: recentRequests(i),
 }));
 
 const byIndex = (idx: string) => creds[Number(idx.replace('idx-', ''))];
