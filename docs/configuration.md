@@ -15,7 +15,7 @@ is a setup error for operational commands. `help`, `--version`, and
 `completions` work with an empty HOME.
 
 ```sh
-fleet --config ./examples/config.toml config validate
+fleet --config ./cli/examples/config.toml config validate
 ```
 
 Exit 0 if the file is valid. Exit 2 if it is invalid. The command does not

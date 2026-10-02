@@ -11,7 +11,7 @@
   sshTargetPattern = "[^-[:cntrl:]][^[:cntrl:]]*";
   remoteHostPattern = "[A-Za-z0-9._-]+";
   labelPattern = "[A-Za-z0-9][A-Za-z0-9._-]*";
-  # Mirror the runtime validators in src/config.rs so bad values fail at
+  # Mirror the runtime validators in cli/src/config.rs so bad values fail at
   # evaluation instead of at the first fleet command.
   tmuxCommandPattern = "[A-Za-z0-9_./][A-Za-z0-9_./-]*";
   tmuxSessionPattern = "[A-Za-z0-9_.-]+";

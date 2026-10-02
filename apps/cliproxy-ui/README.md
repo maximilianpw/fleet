@@ -98,15 +98,15 @@ bun install --frozen-lockfile
 bun run build
 ```
 
-The output is **`dist/index.html`**, with JavaScript, CSS, and bundled assets inlined. The release workflow renames it to `management.html` for backend hosting.
+The output is **`dist/index.html`**, with JavaScript, CSS, and bundled assets inlined. The Fleet Nix package installs it as `share/cliproxy-ui/management.html` for backend hosting.
 
 Use `bun run preview` to preview locally. Prefer an HTTP server over opening the file via `file://`, which can encounter browser CORS restrictions.
 
 <details>
 <summary><strong>Release details</strong></summary>
 
-- Tags matching `vX.Y.Z` trigger [the release workflow](.github/workflows/release.yml).
-- The UI version is injected at build time from `VERSION`, then git tags, then the package version, with `dev` as the final fallback.
+- In the Fleet monorepo, build with `nix build .#cliproxy-ui`. There is no tag-triggered release workflow; Fleet's git tags version the CLI.
+- The UI version is injected at build time from `VERSION`, then the package version, with `dev` as the final fallback. The Nix package sets `VERSION=cliproxy-ui-<Fleet short rev>`.
 - Hash routing and an ES2020 build target keep deployment simple.
 
 </details>

@@ -43,12 +43,28 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: FLEET_REQUIRE_FISH=1 cargo test --locked --all-targets
 
+  cliproxy-ui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/cliproxy-ui
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+      - run: bun install --frozen-lockfile
+      - run: bun run verify
+
   nix-linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: DeterminateSystems/determinate-nix-action@527f17dd63d2d60d3e5552934bc84b9a33a14d11 # v3
-      - run: nix build "path:$PWD#fleet" "path:$PWD#checks.x86_64-linux.fleet" "path:$PWD#checks.x86_64-linux.home-manager" "path:$PWD#checks.x86_64-linux.alejandra" --no-link
+      - run: nix build "path:$PWD#fleet" "path:$PWD#checks.x86_64-linux.fleet" "path:$PWD#checks.x86_64-linux.home-manager" "path:$PWD#checks.x86_64-linux.alejandra" "path:$PWD#cliproxy-ui" "path:$PWD#checks.x86_64-linux.cliproxy-ui" --no-link
       - run: nix eval --raw "path:$PWD#packages.aarch64-darwin.fleet.name"
 
   nix-macos:
@@ -56,4 +72,4 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: DeterminateSystems/determinate-nix-action@527f17dd63d2d60d3e5552934bc84b9a33a14d11 # v3
-      - run: nix build "path:$PWD#fleet" "path:$PWD#checks.aarch64-darwin.fleet" --no-link
+      - run: nix build "path:$PWD#fleet" "path:$PWD#checks.aarch64-darwin.fleet" "path:$PWD#cliproxy-ui" "path:$PWD#checks.aarch64-darwin.cliproxy-ui" --no-link

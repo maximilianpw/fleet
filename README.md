@@ -8,12 +8,18 @@ This repository packages Fleet independently from any personal Nix
 configuration. The crate is not published to crates.io, and installing this
 source does not switch an existing host configuration.
 
+The repository is a monorepo. The CLI lives in `cli/`. The CLIProxy
+management UI lives in `apps/cliproxy-ui/` and is packaged as
+`packages.<system>.cliproxy-ui`, a single
+`share/cliproxy-ui/management.html`. See
+[docs/monorepo-migration-plan.md](docs/monorepo-migration-plan.md).
+
 ## Install
 
 Cargo:
 
 ```sh
-cargo install --locked --path . --root "$PWD/target/fleet-prefix"
+cargo install --locked --path cli --root "$PWD/target/fleet-prefix"
 ```
 
 Nix:
@@ -77,11 +83,11 @@ Settings use the TOML field names. The module writes
 only exist when `tunnels.supervisor = "launchd"`. See
 [docs/configuration.md](docs/configuration.md).
 
-A manual non-Nix file lives at [examples/config.toml](examples/config.toml).
+A manual non-Nix file lives at [cli/examples/config.toml](cli/examples/config.toml).
 Validate it with:
 
 ```sh
-fleet --config ./examples/config.toml config validate
+fleet --config ./cli/examples/config.toml config validate
 ```
 
 ## Commands
@@ -114,6 +120,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 nix build path:$PWD#fleet path:$PWD#checks.x86_64-linux.fleet path:$PWD#checks.x86_64-linux.home-manager --no-link
 alejandra --check flake.nix nix
+nix build path:$PWD#cliproxy-ui path:$PWD#checks.x86_64-linux.cliproxy-ui --no-link
 ```
 
 Supported package outputs are `x86_64-linux` and `aarch64-darwin`. The Linux
@@ -125,5 +132,7 @@ and does not build a Darwin Rust binary.
 - [Configuration](docs/configuration.md)
 - [Compatibility](docs/compatibility.md)
 - [Migration baseline](docs/migration-baseline.md)
+- [Monorepo migration plan](docs/monorepo-migration-plan.md)
 
-No license file. That is an owner decision, not an omission.
+No root license file. That is an owner decision, not an omission. The UI in
+`apps/cliproxy-ui/` keeps its upstream MIT license.

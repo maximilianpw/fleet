@@ -98,15 +98,15 @@ bun install --frozen-lockfile
 bun run build
 ```
 
-产物为 **`dist/index.html`**，JavaScript、CSS 与打包资源均已内联。发布工作流会将其重命名为 `management.html`，供后端托管。
+产物为 **`dist/index.html`**，JavaScript、CSS 与打包资源均已内联。Fleet 的 Nix 包会将其安装为 `share/cliproxy-ui/management.html`，供后端托管。
 
 使用 `bun run preview` 本地预览。建议通过 HTTP 服务访问，直接用 `file://` 打开可能受到浏览器 CORS 限制。
 
 <details>
 <summary><strong>发布细节</strong></summary>
 
-- `vX.Y.Z` 格式的标签会触发[发布工作流](.github/workflows/release.yml)。
-- UI 版本在构建时注入，依次取自 `VERSION`、git tag、package 版本，最终回退为 `dev`。
+- 在 Fleet monorepo 中使用 `nix build .#cliproxy-ui` 构建。没有由标签触发的发布工作流；Fleet 的 git tag 用于 CLI 版本。
+- UI 版本在构建时注入，依次取自 `VERSION`、package 版本，最终回退为 `dev`。Nix 包会设置 `VERSION=cliproxy-ui-<Fleet 短提交号>`。
 - 使用 Hash 路由与 ES2020 构建目标，保持部署简单。
 
 </details>

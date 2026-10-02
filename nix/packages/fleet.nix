@@ -10,7 +10,8 @@
   procps,
   fish,
 }: let
-  cargoToml = builtins.fromTOML (builtins.readFile ../Cargo.toml);
+  root = ../..;
+  cargoToml = builtins.fromTOML (builtins.readFile (root + "/cli/Cargo.toml"));
   binPath = lib.makeBinPath (
     [
       openssh
@@ -23,18 +24,16 @@ in
   rustPlatform.buildRustPackage {
     pname = cargoToml.package.name;
     version = cargoToml.package.version;
-    src = lib.cleanSourceWith {
-      src = ./..;
-      filter = path: _type: let
-        name = baseNameOf path;
-      in
-        name
-        != ".git"
-        && name != "result"
-        && name != "target"
-        && name != "cliproxy-ui";
+    # Only the Cargo workspace, so app and doc edits do not rebuild the CLI.
+    src = lib.fileset.toSource {
+      inherit root;
+      fileset = lib.fileset.unions [
+        (root + "/Cargo.toml")
+        (root + "/Cargo.lock")
+        (root + "/cli")
+      ];
     };
-    cargoLock.lockFile = ../Cargo.lock;
+    cargoLock.lockFile = root + "/Cargo.lock";
 
     nativeBuildInputs = [
       installShellFiles

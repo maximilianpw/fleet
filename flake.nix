@@ -19,7 +19,11 @@
     forEachSystem = f: lib.genAttrs systems (system: f system);
     pkgsFor = system: nixpkgs.legacyPackages.${system};
 
-    mkFleet = pkgs: pkgs.callPackage ./nix/package.nix {};
+    mkFleet = pkgs: pkgs.callPackage ./nix/packages/fleet.nix {};
+    mkCliproxyUi = pkgs:
+      pkgs.callPackage ./nix/packages/cliproxy-ui.nix {
+        sourceRevision = self.shortRev or self.dirtyShortRev or null;
+      };
 
     laptopHost = {
       ssh_target = "laptop";
@@ -165,7 +169,7 @@
         test -s fish.comp
         test -x ${lib.getExe fleet}
         test -x ${fleet}/bin/fleet-tunnel-runner
-        fleet --config ${./examples/config.toml} config validate
+        fleet --config ${./cli/examples/config.toml} config validate
         touch "$out"
       '';
 
@@ -320,7 +324,7 @@
         pkgs.runCommand "home-manager" {
           nativeBuildInputs = [fleet];
           inherit linuxToml darwinToml;
-          example = ./examples/config.toml;
+          example = ./cli/examples/config.toml;
         } ''
           set -eu
           printf '%s\n' "$linuxToml" >linux.toml
@@ -339,6 +343,7 @@
   in {
     packages = forEachSystem (system: rec {
       fleet = mkFleet (pkgsFor system);
+      cliproxy-ui = mkCliproxyUi (pkgsFor system);
       default = fleet;
     });
 
@@ -349,6 +354,7 @@
       in
         {
           fleet = mkFleetCheck pkgs fleet;
+          cliproxy-ui = self.packages.${system}.cliproxy-ui.tests.verify;
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
           home-manager = mkHomeManagerCheck pkgs fleet;
@@ -362,7 +368,7 @@
         }
     );
 
-    homeManagerModules.default = import ./nix/home-manager.nix;
+    homeManagerModules.default = import ./nix/modules/home-manager.nix;
 
     formatter = forEachSystem (system: (pkgsFor system).alejandra);
 
