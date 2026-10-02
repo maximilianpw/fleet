@@ -31,7 +31,8 @@ in
         name
         != ".git"
         && name != "result"
-        && name != "target";
+        && name != "target"
+        && name != "cliproxy-ui";
     };
     cargoLock.lockFile = ../Cargo.lock;
 

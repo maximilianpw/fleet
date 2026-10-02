@@ -1,0 +1,222 @@
+@use '../../../styles/mixins' as *;
+
+/* Provider summary strip: one bordered panel, hairline dividers between cells.
+ * Dividers are box-shadows clipped by the panel, so a wrapped last row never
+ * shows a stray border on its open side. */
+
+.strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--bg-primary) 70%, transparent);
+}
+
+.cell {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 18px 22px 16px;
+  box-shadow:
+    1px 0 0 var(--border-color),
+    0 1px 0 var(--border-color);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  margin-bottom: 6px;
+}
+
+.icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14.5px;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.count {
+  flex-shrink: 0;
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.figure {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: -2px;
+}
+
+.value {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.capacity {
+  font-size: 14px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* One segment per credential; each segment is its own small meter. */
+.segments {
+  display: flex;
+  gap: 4px;
+  margin: 4px 0 2px;
+}
+
+.segment {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 6px;
+  height: 4px;
+  border-radius: $radius-full;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
+}
+
+.segmentFill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  transition: width 0.5s var(--ease-out-strong, ease-out);
+
+  [data-level='high'] > & {
+    background: var(--viz-success);
+  }
+
+  [data-level='medium'] > & {
+    background: var(--quota-medium-color);
+  }
+
+  [data-level='low'] > & {
+    background: var(--viz-failure);
+  }
+}
+
+.reset {
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.resetRelative {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.secondary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.secondaryList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.secondaryItem {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12.5px;
+}
+
+.secondaryLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+}
+
+.secondaryValue {
+  flex-shrink: 0;
+  font-weight: 650;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.toggle {
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+
+  &:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .toggle:hover {
+    color: var(--text-primary);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .segmentFill {
+    transition: none;
+  }
+}
+
+@include mobile {
+  .cell {
+    padding: 16px;
+  }
+
+  .value {
+    font-size: 26px;
+  }
+}
