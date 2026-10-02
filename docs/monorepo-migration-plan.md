@@ -1,9 +1,9 @@
 # Fleet monorepo migration plan
 
-Status: stages 1–3 done. Stage 4 in progress: the service, its package,
-and the NixOS module are in Fleet, and nix-config runs them. The Pi client
-change and the removal of the pi-config implementation come after Kim runs
-the packaged service. Stage 5 not started.
+Status: stages 1–4 done. Kim runs the packaged quota service, verified in
+local and remote client mode; Pi reads it over HTTP and pi-config no longer
+contains the implementation. Stage 5 (update workflow documentation) not
+started.
 
 Make Fleet the monorepo for operational software, with nix-config selecting
 versions and configuring each machine. UI updates will use pinned Nix packages
