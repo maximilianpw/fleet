@@ -390,7 +390,7 @@ pub fn render_status(current_host: &str, snapshots: &[HostSnapshot], now: u64) -
     let _ = writeln!(out, "Current machine: {current_host}\n");
     let _ = writeln!(
         out,
-        "{:<18} {:<10} {:<18} {:<9} {:<28} AGENTS",
+        "{:<18} {:<10} {:<21} {:<9} {:<28} AGENTS",
         "HOST", "NETWORK", "PATH", "FLEET", "SESSIONS"
     );
     for snapshot in snapshots {
@@ -424,7 +424,7 @@ pub fn render_status(current_host: &str, snapshots: &[HostSnapshot], now: u64) -
         };
         let _ = writeln!(
             out,
-            "{:<18} {:<10} {:<18} {:<9} {:<28} {}",
+            "{:<18} {:<10} {:<21} {:<9} {:<28} {}",
             snapshot.host,
             network_label(&snapshot.presence),
             path,
