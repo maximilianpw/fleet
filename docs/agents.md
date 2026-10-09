@@ -113,4 +113,6 @@ Transcript placement relies on agent internals that may change:
   recomputed for the target's working directory.
 - Codex and others: the same path relative to the home directory.
 
-An agent that records `--resume-command` skips the transcript copy.
+A recorded `--resume-command` changes only how the agent restarts. Any
+recorded transcript is still copied. An agent with a custom resume command and
+no transcript moves without a copy.

@@ -376,6 +376,7 @@ fn run(cli: Cli) -> Result<(), FleetError> {
         }
         Some(Commands::Doctor { host, filter, json }) => {
             let config = load_config(cli.config.as_deref(), &env)?;
+            let explicit_host = host.is_some();
             let hosts = match host {
                 Some(host) => {
                     validate_ssh_target(&host)?;
@@ -394,7 +395,7 @@ fn run(cli: Cli) -> Result<(), FleetError> {
                     hosts
                 }
             };
-            run_doctor_command(&config, &hosts, &env, json)
+            run_doctor_command(&config, &hosts, &env, json, explicit_host)
         }
     }
 }

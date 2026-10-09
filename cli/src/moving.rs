@@ -388,8 +388,9 @@ pub fn run_move(
     let resume =
         resume_command(&record).ok_or_else(|| MoveError::NoResumeCommand(record.agent.clone()))?;
     let cwd = record.cwd.clone().ok_or(MoveError::MissingField("cwd"))?;
-    let needs_transcript = record.resume_command.is_none();
-    if needs_transcript && record.transcript.is_none() {
+    // A recorded resume command replaces only how the agent restarts; any
+    // known transcript still has to reach the target.
+    if record.resume_command.is_none() && record.transcript.is_none() {
         return Err(MoveError::MissingField("transcript path"));
     }
     for value in [&cwd, &resume]
@@ -467,7 +468,7 @@ pub fn run_move(
         return Err(step_error(&target, &output, target_failure(output.code)));
     }
 
-    if let Some(transcript) = record.transcript.as_deref().filter(|_| needs_transcript) {
+    if let Some(transcript) = record.transcript.as_deref() {
         let destination =
             target_transcript_path(&record, transcript, &repo.home, &target_home, &target_cwd)
                 .ok_or_else(|| MoveError::Step {
