@@ -246,15 +246,18 @@ pub fn run_tunnel_command(
 
 /// Public CLI hook for `fleet doctor [HOST]`.
 ///
-/// `hosts` holds canonical names or aliases the CLI already validated. With
-/// more than one host, each report is headed by `== HOST ==` and hosts are
-/// checked concurrently. After the historical checks, a reachable host also
+/// `hosts` holds canonical names or aliases the CLI already validated.
+/// `explicit_host` is true for `doctor HOST`, which keeps the historical
+/// unheaded text and a single JSON object. Otherwise every report is headed
+/// by `== HOST ==` and JSON is an array, even when one host is selected.
+/// Hosts are checked concurrently. After the historical checks, a reachable host also
 /// reports whether its tmux command and `fleet` are available.
 pub fn run_doctor_command(
     config: &FleetConfig,
     hosts: &[String],
     env: &ProcessEnv,
     json: bool,
+    explicit_host: bool,
 ) -> Result<(), FleetError> {
     let mappings = doctor_mappings_from_config(config);
     let ctx = tunnel_context(config, env, &mappings)?;
@@ -309,11 +312,11 @@ pub fn run_doctor_command(
             })
             .collect();
         let value = match rendered.as_slice() {
-            [single] if hosts.len() == 1 => single.clone(),
+            [single] if explicit_host => single.clone(),
             _ => serde_json::Value::Array(rendered),
         };
         write_json(&value)?;
-    } else if reports.len() == 1 && hosts.len() == 1 {
+    } else if explicit_host {
         write_stdout(reports[0].1.render())?;
     } else {
         let text: Vec<String> = reports

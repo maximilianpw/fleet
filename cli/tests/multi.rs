@@ -589,3 +589,61 @@ fn move_fails_fast_when_the_transcript_writer_dies() {
         .ssh_calls()
         .contains(&"studio fleet-start".to_string()));
 }
+
+#[test]
+fn doctor_without_host_keeps_the_multi_host_shape_for_one_match() {
+    let fixture = Fixture::new();
+    fixture.write_xdg_config(MINIMAL_TOML);
+    fixture.respond("workbox", "fleet-probe", &probe("[]"), 0);
+    let output = fixture
+        .fleet_scripted()
+        .args(["doctor", "--where", "os=linux", "--json"])
+        .output()
+        .unwrap();
+    let (stdout, _, code) = Fixture::output_text(&output);
+    assert_eq!(code, 0);
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(value.as_array().map(Vec::len), Some(1), "{stdout}");
+
+    let output = fixture
+        .fleet_scripted()
+        .args(["doctor", "--where", "os=linux"])
+        .output()
+        .unwrap();
+    let (stdout, _, _) = Fixture::output_text(&output);
+    assert!(stdout.starts_with("== workbox ==\n"), "{stdout}");
+}
+
+#[test]
+fn move_copies_the_transcript_even_with_a_custom_resume_command() {
+    let fixture = move_fixture("done");
+    fixture.respond(
+        "workbox",
+        "fleet-agents",
+        &WORKBOX_AGENT.replace("needs-input", "done").replace(
+            "\"session_id\"",
+            "\"resume_command\":\"claude --resume abc --model opus\",\"session_id\"",
+        ),
+        0,
+    );
+    let output = fixture
+        .fleet_scripted()
+        .args(["move", "workbox", "agents", "studio"])
+        .output()
+        .unwrap();
+    let (stdout, stderr, code) = Fixture::output_text(&output);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert_eq!(
+        fixture
+            .response_file("studio", "fleet-transcript-write", "stdin")
+            .as_deref(),
+        Some("{\"line\":1}\n")
+    );
+    let start = fixture
+        .response_file("studio", "fleet-start", "cmd")
+        .unwrap();
+    assert!(
+        start.contains("claude --resume abc --model opus"),
+        "{start}"
+    );
+}
