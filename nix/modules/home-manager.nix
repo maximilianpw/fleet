@@ -72,7 +72,7 @@
     client_enrolled = ${toTOMLValue host.client_enrolled}
     gui = ${toTOMLValue host.gui}
     long_running_agents = ${toTOMLValue host.long_running_agents}
-    ${optionalLine "tmux_command" host.tmux_command}${optionalLine "tmux_session" host.tmux_session}${optionalLine "t3code_port" host.t3code_port}${concatMapStrings (alias: renderAliasTarget name alias host.alias_targets.${alias}) aliasNames}
+    ${optionalLine "tmux_command" host.tmux_command}${optionalLine "tmux_session" host.tmux_session}${optionalLine "t3code_port" host.t3code_port}${optionalLine "tailscale_name" host.tailscale_name}${concatMapStrings (alias: renderAliasTarget name alias host.alias_targets.${alias}) aliasNames}
   '';
 
   renderMapping = mapping: ''
@@ -183,6 +183,11 @@
         type = types.nullOr portType;
         default = null;
         description = "Declared T3 Code port used by fleet t3.";
+      };
+      tailscale_name = mkOption {
+        type = types.nullOr (types.strMatching sshTargetPattern);
+        default = null;
+        description = "Tailscale HostName or MagicDNS name for fleet status presence. When null, Fleet matches the host name, ssh_target, and display_target.";
       };
       alias_targets = mkOption {
         type = types.attrsOf (types.submodule aliasTargetModule);

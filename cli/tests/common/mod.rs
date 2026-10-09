@@ -188,6 +188,47 @@ impl Fixture {
         cmd
     }
 
+    /// Directory the scripted fake `ssh` answers from.
+    pub fn responses(&self) -> PathBuf {
+        let dir = self.root.join("ssh-responses");
+        fs::create_dir_all(&dir).expect("responses dir");
+        dir
+    }
+
+    /// Script the fake `ssh` reply for one target and query step.
+    pub fn respond(&self, target: &str, step: &str, stdout: &str, code: i32) {
+        let dir = self.responses();
+        fs::write(dir.join(format!("{target}.{step}.out")), stdout).expect("response");
+        fs::write(dir.join(format!("{target}.{step}.code")), code.to_string()).expect("code");
+    }
+
+    /// `TARGET STEP` lines in call order.
+    pub fn ssh_calls(&self) -> Vec<String> {
+        read_lines(&self.responses().join("calls")).unwrap_or_default()
+    }
+
+    pub fn response_file(&self, target: &str, step: &str, suffix: &str) -> Option<String> {
+        fs::read_to_string(self.responses().join(format!("{target}.{step}.{suffix}"))).ok()
+    }
+
+    /// `fleet` with scripted SSH, a Tailscale status file, and a private
+    /// agent state directory.
+    pub fn fleet_scripted(&self) -> Command {
+        let mut cmd = self.fleet();
+        cmd.env("FLEET_SSH_RESPONSES", self.responses())
+            .env("FLEET_TAILSCALE_JSON", self.root.join("tailscale.json"))
+            .env("XDG_STATE_HOME", self.root.join("state"));
+        cmd
+    }
+
+    pub fn set_tailscale(&self, json: &str) {
+        fs::write(self.root.join("tailscale.json"), json).expect("tailscale json");
+    }
+
+    pub fn write_bin(&self, name: &str, body: &str) {
+        write_script(&self.bin.join(name), body);
+    }
+
     pub fn path(&self) -> String {
         let rest = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into());
         format!("{}:{rest}", self.bin.display())
@@ -228,6 +269,30 @@ impl Fixture {
         write_script(
             &self.bin.join("ssh"),
             r#"#!/bin/sh
+# Scripted mode for multi-host queries: answers by target and the
+# `: fleet-STEP;` marker that starts every Fleet query script.
+if [ -n "${FLEET_SSH_RESPONSES:-}" ]; then
+  dir=$FLEET_SSH_RESPONSES
+  n=$#
+  eval "cmd=\${$n}"
+  eval "target=\${$((n - 1))}"
+  step=$(printf '%s' "$cmd" | sed -n "s/^sh -c ': \(fleet-[a-z-]*\);.*/\1/p")
+  [ -n "$step" ] || step=plain
+  printf '%s %s\n' "$target" "$step" >> "$dir/calls"
+  printf '%s\n' "$cmd" > "$dir/$target.$step.cmd"
+  : > "$dir/$target.$step.args"
+  for arg in "$@"; do
+    printf '%s\n' "$arg" >> "$dir/$target.$step.args"
+  done
+  code=0
+  if [ -f "$dir/$target.$step.code" ]; then code=$(cat "$dir/$target.$step.code"); fi
+  if [ "$step" = fleet-transcript-write ] && [ "$code" = 0 ]; then
+    cat > "$dir/$target.$step.stdin"
+  fi
+  if [ -f "$dir/$target.$step.out" ]; then cat "$dir/$target.$step.out"; fi
+  if [ -f "$dir/$target.$step.err" ]; then cat "$dir/$target.$step.err" >&2; fi
+  exit "$code"
+fi
 log=${FLEET_SSH_ARGS_LOG:?}
 : > "$log"
 for arg in "$@"; do
@@ -248,6 +313,16 @@ if [ -n "${FLEET_SSH_HOLD:-}" ]; then
   done
 fi
 exit 0
+"#,
+        );
+        write_script(
+            &self.bin.join("tailscale"),
+            r#"#!/bin/sh
+if [ -n "${FLEET_TAILSCALE_JSON:-}" ] && [ -f "$FLEET_TAILSCALE_JSON" ]; then
+  cat "$FLEET_TAILSCALE_JSON"
+else
+  printf '{}\n'
+fi
 "#,
         );
         write_script(

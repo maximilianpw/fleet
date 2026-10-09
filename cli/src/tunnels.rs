@@ -437,30 +437,67 @@ fn command_basename(command: &str) -> &str {
     command.rsplit('/').next().unwrap_or(command)
 }
 
+/// One `tunnel status` row, also the `--json` shape.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct StatusRow {
+    pub local_port: u16,
+    pub host: String,
+    pub remote_host: String,
+    pub remote_port: u16,
+    pub label: String,
+    pub supervisor: String,
+    pub state: String,
+    pub local_listen: String,
+}
+
+pub fn status_rows(
+    ctx: &TunnelContext<'_>,
+    launchd: &impl Launchctl,
+    listen: &impl ListenProbe,
+) -> Result<Vec<StatusRow>, TunnelError> {
+    if ctx.supervisor == Supervisor::Launchd {
+        require_launchctl(launchd)?;
+    }
+    Ok(ctx
+        .mappings
+        .iter()
+        .map(|mapping| {
+            let obs = inspect(mapping, ctx.supervisor, ctx.uid, launchd, listen);
+            StatusRow {
+                local_port: mapping.local_port,
+                host: mapping.host.clone(),
+                remote_host: mapping.remote_host.clone(),
+                remote_port: mapping.remote_port,
+                label: mapping.label.clone(),
+                supervisor: ctx.supervisor.as_str().to_string(),
+                state: obs.state().as_str().to_string(),
+                local_listen: obs.listen.as_str().to_string(),
+            }
+        })
+        .collect())
+}
+
 pub fn print_status(
     out: &mut dyn Write,
     ctx: &TunnelContext<'_>,
     launchd: &impl Launchctl,
     listen: &impl ListenProbe,
 ) -> Result<(), TunnelError> {
-    if ctx.supervisor == Supervisor::Launchd {
-        require_launchctl(launchd)?;
-    }
+    let rows = status_rows(ctx, launchd, listen)?;
     writeln!(
         out,
         "{:<8} {:<28} {:<12} {:<10} LOCAL_LISTEN",
         "LOCAL", "REMOTE", "SUPERVISOR", "STATE"
     )?;
-    for mapping in ctx.mappings {
-        let obs = inspect(mapping, ctx.supervisor, ctx.uid, launchd, listen);
+    for row in &rows {
         writeln!(
             out,
             "{:<8} {:<28} {:<12} {:<10} {}",
-            mapping.local_port,
-            mapping.remote_display(),
-            ctx.supervisor.as_str(),
-            obs.state().as_str(),
-            obs.listen.as_str()
+            row.local_port,
+            format!("{}:{}:{}", row.host, row.remote_host, row.remote_port),
+            row.supervisor,
+            row.state,
+            row.local_listen
         )?;
     }
     if ctx.mappings.is_empty() {

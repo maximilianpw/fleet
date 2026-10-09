@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 const SIGTERM: i32 = 15;
+const SIGKILL: i32 = 9;
 const TIMEOUT_EXIT: i32 = 124;
 
 extern "C" {
@@ -261,7 +262,23 @@ pub(crate) fn run_with_deadline(
     kill_after: Duration,
     poll: Duration,
 ) -> io::Result<BoundedOutput> {
-    match run_with_deadline_or_stop(cmd, timeout, kill_after, poll, || None::<Infallible>)? {
+    match run_bounded(cmd, timeout, kill_after, poll, || None::<Infallible>, false)? {
+        Ok(output) => Ok(output),
+        Err(never) => match never {},
+    }
+}
+
+/// [`run_with_deadline`] for a shell script whose children may outlive it.
+/// The child leads a new process group, and timeouts signal the whole group,
+/// so a grandchild holding stdout open cannot stall the caller.
+pub(crate) fn run_group_with_deadline(
+    cmd: &mut Command,
+    timeout: Duration,
+    kill_after: Duration,
+    poll: Duration,
+) -> io::Result<BoundedOutput> {
+    cmd.process_group(0);
+    match run_bounded(cmd, timeout, kill_after, poll, || None::<Infallible>, true)? {
         Ok(output) => Ok(output),
         Err(never) => match never {},
     }
@@ -278,6 +295,17 @@ pub(crate) fn run_with_deadline_or_stop<S>(
     poll: Duration,
     stop: impl Fn() -> Option<S>,
 ) -> io::Result<Result<BoundedOutput, S>> {
+    run_bounded(cmd, timeout, kill_after, poll, stop, false)
+}
+
+fn run_bounded<S>(
+    cmd: &mut Command,
+    timeout: Duration,
+    kill_after: Duration,
+    poll: Duration,
+    stop: impl Fn() -> Option<S>,
+    group: bool,
+) -> io::Result<Result<BoundedOutput, S>> {
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -286,19 +314,19 @@ pub(crate) fn run_with_deadline_or_stop<S>(
     let stderr = drain(child.stderr.take(), "stderr")?;
     let poll = poll.max(Duration::from_millis(1));
 
-    let finish = match wait_bounded(&mut child, timeout, kill_after, poll, &stop) {
+    let finish = match wait_bounded(&mut child, timeout, kill_after, poll, &stop, group) {
         Ok(Ok(finish)) => finish,
         Ok(Err(reason)) => {
-            kill_and_reap(&mut child);
+            kill_and_reap(&mut child, group);
             return Ok(Err(reason));
         }
         Err(error) => {
-            kill_and_reap(&mut child);
+            kill_and_reap(&mut child, group);
             return Err(error);
         }
     };
     if finish == Finish::TimedOut(None) {
-        kill_and_reap(&mut child);
+        kill_and_reap(&mut child, group);
     }
 
     let stdout = stdout.join().unwrap_or_default();
@@ -346,13 +374,18 @@ fn wait_bounded<S>(
     kill_after: Duration,
     poll: Duration,
     stop: &impl Fn() -> Option<S>,
+    group: bool,
 ) -> io::Result<Result<Finish, S>> {
     match wait_until(child, Instant::now() + timeout, poll, stop)? {
         Wait::Exited(status) => return Ok(Ok(Finish::Exited(status))),
         Wait::Stopped(reason) => return Ok(Err(reason)),
         Wait::Expired => {}
     }
-    send_signal(child.id(), SIGTERM);
+    if group {
+        send_group_signal(child.id(), SIGTERM);
+    } else {
+        send_signal(child.id(), SIGTERM);
+    }
     Ok(
         match wait_until(child, Instant::now() + kill_after, poll, stop)? {
             Wait::Exited(status) => Ok(Finish::TimedOut(Some(status))),
@@ -383,7 +416,10 @@ fn wait_until<S>(
     }
 }
 
-fn kill_and_reap(child: &mut Child) {
+fn kill_and_reap(child: &mut Child, group: bool) {
+    if group {
+        send_group_signal(child.id(), SIGKILL);
+    }
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -412,6 +448,20 @@ pub(crate) fn send_signal(pid: u32, sig: i32) {
     // SAFETY: kill has no memory-safety preconditions; ESRCH is ignored.
     unsafe {
         let _ = kill(pid, sig);
+    }
+}
+
+/// Signal the process group led by `pid`, as created by `process_group(0)`.
+fn send_group_signal(pid: u32, sig: i32) {
+    let Ok(pid) = i32::try_from(pid) else {
+        return;
+    };
+    if pid <= 0 {
+        return;
+    }
+    // SAFETY: kill has no memory-safety preconditions; ESRCH is ignored.
+    unsafe {
+        let _ = kill(-pid, sig);
     }
 }
 

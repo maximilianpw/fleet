@@ -54,6 +54,39 @@ and prevents its internal loop from reconnecting.
 - `completions SHELL`
 - `config validate`
 - `copy SOURCE DESTINATION` for one local-to-remote or remote-to-local file
+- `copy -r` for directories (`scp -r`)
+- `--json` on `list`, `tunnel status`, `forward list`, and `doctor`. Text
+  output without `--json` is unchanged.
+- `status`, `agents`, `pick`, `ports`, `move`, and `hook`. See
+  [agents.md](agents.md) for `hook` and `move`.
+- `doctor` without HOST, or with `--where`, checks the selected hosts
+  concurrently under `== HOST ==` headings. `doctor HOST` keeps its
+  historical lines first, then appends `tmux: ok|missing|unknown`. For a remote
+  host it also appends `fleet: VERSION|missing`. A missing tmux is
+  `unhealthy:`. A missing or different `fleet` is only a `warning:` line.
+  Exit codes keep their meaning.
+- `tailscale_name` host field.
+- Help text lists the commands above.
+
+## Multi-host queries and SSH reuse
+
+`status`, `agents`, `ports`, `move`, and doctor's tmux/fleet check run POSIX
+`sh` scripts. A script is passed as one `sh -c '...'` argument, which POSIX
+login shells and fish both parse unchanged. Interpolated values that contain
+backslashes or control characters are rejected. Remote scripts append Nix
+and Homebrew directories to PATH.
+
+These queries use `BatchMode=yes`, `ForwardAgent=no`, and a Fleet-owned
+`ControlPath` with `ControlMaster=auto` and `ControlPersist=60`, so repeated
+queries to a host share one connection. They are the only multiplexed SSH.
+`ssh`, `shell`, `run`, `copy`, ad-hoc and managed forwards, `t3`, and
+doctor's reachability and TCP probes keep their exact historical argv.
+
+Tailscale presence comes from the local `tailscale status --json`, falling
+back to the macOS app bundle CLI. If Tailscale is missing, presence is
+`unknown`; only `--where online` then fails. `status` and `agents` do not
+contact hosts that Tailscale reports offline. Hosts it does not list are still
+contacted. `doctor`, `ports`, and `move` always try SSH.
 
 ## Permitted differences
 
@@ -78,10 +111,10 @@ pass `-O` or opt into the legacy SCP protocol. It resolves a canonical host or
 alias to `ssh_target`, passes paths as argv after `--`, and exec-replaces Fleet
 so transfer diagnostics, signals, and exit status come from `scp`.
 
-The first version copies one file and requires exactly one local endpoint and
-one declared remote Fleet endpoint. A bare remote destination means its home
-directory. Pull sources require `HOST:PATH`. Recursive and remote-to-remote
-copy are out of scope. `CURRENT_HOST:PATH` is normalized to a local path.
+Copy requires exactly one local endpoint and one declared remote Fleet
+endpoint. A bare remote destination means its home directory. Pull sources
+require `HOST:PATH`. `-r` copies directories with `scp -r`. Remote-to-remote
+copy is out of scope. `CURRENT_HOST:PATH` is normalized to a local path.
 Local filenames containing a colon should use an explicit path prefix such as
 `./report:final.md` so they are not parsed as Fleet remote syntax.
 
@@ -100,6 +133,10 @@ on the remote host.
 ## Not in this package
 
 - Herdr orchestration. This CLI does not start or manage Herdr sessions.
+- Agent orchestration beyond `move`. Fleet does not start new agents, send
+  keystrokes to them, or read pane output. Agents report through `fleet hook`.
+- A private tmux server. Fleet uses each host's default tmux server so every
+  machine sees the same sessions.
 - Workspace state, dynamic tunnel installation, or a second supervisor.
 - Personal inventory, SSH keys, known hosts, or `FLEET.md`.
 - Windows.

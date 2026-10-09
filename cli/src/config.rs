@@ -191,6 +191,7 @@ pub struct HostConfig {
     pub tmux_command: Option<String>,
     pub tmux_session: Option<String>,
     pub t3code_port: Option<Port>,
+    pub tailscale_name: Option<String>,
     #[serde(default)]
     pub alias_targets: BTreeMap<String, AliasTargets>,
 }
@@ -482,6 +483,9 @@ fn validate_config(config: &FleetConfig) -> Result<(), ConfigError> {
         }
         if let Some(target) = &host.forward_target {
             validate_ssh_target(target)?;
+        }
+        if let Some(name) = &host.tailscale_name {
+            validate_ssh_target(name)?;
         }
         if let Some(command) = &host.tmux_command {
             if !is_safe_tmux_command(command) {

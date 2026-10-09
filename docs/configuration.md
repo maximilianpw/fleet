@@ -55,6 +55,7 @@ Optional host fields, with runtime defaults:
 | `tmux_command` | `tmux` |
 | `tmux_session` | `main` |
 | `t3code_port` | unset; `fleet t3` requires it |
+| `tailscale_name` | unset; `status` matches the host name, `ssh_target`, and `display_target` against Tailscale peers |
 | `alias_targets.<alias>` | inherit canonical targets |
 
 Nix sets `display_target` to the inventory hostname so `list` can show the
@@ -74,6 +75,10 @@ names another executable or session.
 `fleet copy` resolves canonical names and aliases through `ssh_target`. Unlike
 shell, run, and ad-hoc forward, copy requires declared host metadata; an
 unknown `HOST:PATH` endpoint is rejected before `scp` starts.
+
+`tailscale_name` is the peer's Tailscale HostName or MagicDNS name. It only
+affects presence in `fleet status` and `--where online`. Fleet still connects
+through `ssh_target`.
 
 ### Tunnels
 
@@ -209,3 +214,15 @@ Fleet rejects, before starting a subprocess:
 
 SSH targets are individual arguments. Configuration text is not expanded as
 shell.
+
+## Runtime state
+
+Fleet reads no other configuration file. Two directories hold runtime state:
+
+| Path | Contents |
+| --- | --- |
+| `$XDG_STATE_HOME/fleet/agents/` (default `~/.local/state/fleet/agents/`) | One JSON record per agent, written by `fleet hook`. See [agents.md](agents.md). |
+| `$XDG_RUNTIME_DIR/fleet/ssh/` (else `~/.cache/fleet/ssh/`) | SSH control sockets shared by multi-host queries for 60 seconds. |
+
+If the control socket path would exceed the Unix socket limit, queries use
+unshared connections instead.
