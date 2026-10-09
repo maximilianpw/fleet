@@ -75,6 +75,7 @@
             tmux_target = "tm-workbox";
             forward_target = "fleet-forward-workbox";
             t3code_port = 51000;
+            tailscale_name = "workbox-node";
             alias_targets.dev = {
               ssh_target = "dev";
               tmux_target = "tm-dev";

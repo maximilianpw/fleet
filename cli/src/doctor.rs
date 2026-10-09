@@ -9,6 +9,7 @@ use std::io::{self, Write};
 use std::process::Command;
 use std::time::Duration;
 
+use serde::Serialize;
 use thiserror::Error;
 
 use crate::config::{is_managed_remote_host, Supervisor};
@@ -50,7 +51,8 @@ impl Default for DoctorDeadlines {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SshState {
     Skipped,
     Reachable,
@@ -233,6 +235,95 @@ impl DoctorError {
     }
 }
 
+/// One doctor finding. [`DoctorEvent::text`] is the historical output line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DoctorEvent {
+    Ssh {
+        state: SshState,
+    },
+    Note {
+        text: String,
+    },
+    Tunnel {
+        local_port: u16,
+        supervisor: String,
+        local: String,
+        remote: String,
+    },
+    Unhealthy {
+        text: String,
+    },
+    Tmux {
+        command: String,
+        available: Option<bool>,
+    },
+    Fleet {
+        version: Option<String>,
+    },
+    Warning {
+        text: String,
+    },
+}
+
+impl DoctorEvent {
+    pub fn text(&self) -> String {
+        match self {
+            Self::Ssh { state } => match state {
+                SshState::Skipped => "SSH: skipped (current machine)".into(),
+                SshState::Reachable => "SSH: reachable".into(),
+                SshState::Auth => "SSH: auth failure".into(),
+                SshState::Unavailable => "SSH: unavailable".into(),
+            },
+            Self::Note { text } => text.clone(),
+            Self::Tunnel {
+                local_port,
+                supervisor,
+                local,
+                remote,
+            } => format!(
+                "tunnel {local_port}: supervisor={supervisor} local={local} remote={remote}"
+            ),
+            Self::Unhealthy { text } => format!("unhealthy: {text}"),
+            Self::Tmux { available, .. } => match available {
+                Some(true) => "tmux: ok".into(),
+                Some(false) => "tmux: missing".into(),
+                None => "tmux: unknown".into(),
+            },
+            Self::Fleet { version } => match version {
+                Some(version) => format!("fleet: {version}"),
+                None => "fleet: missing".into(),
+            },
+            Self::Warning { text } => format!("warning: {text}"),
+        }
+    }
+
+    pub fn is_unhealthy(&self) -> bool {
+        matches!(self, Self::Unhealthy { .. })
+    }
+}
+
+/// Doctor findings plus the error that stopped it early, if any. Events
+/// gathered before an early stop are still reported.
+#[derive(Debug)]
+pub struct DoctorReport {
+    pub events: Vec<DoctorEvent>,
+    pub stopped: Option<DoctorError>,
+}
+
+impl DoctorReport {
+    pub fn healthy(&self) -> bool {
+        self.stopped.is_none() && !self.events.iter().any(DoctorEvent::is_unhealthy)
+    }
+
+    pub fn render(&self) -> String {
+        self.events
+            .iter()
+            .map(|event| event.text() + "\n")
+            .collect()
+    }
+}
+
 pub fn doctor(
     out: &mut dyn Write,
     host: &DoctorHost,
@@ -242,9 +333,43 @@ pub fn doctor(
     ssh: &impl SshProbe,
     deadlines: DoctorDeadlines,
 ) -> Result<(), DoctorError> {
-    let mut unhealthy = false;
+    let report = doctor_report(host, ctx, launchd, listen, ssh, deadlines);
+    out.write_all(report.render().as_bytes())
+        .map_err(DoctorError::Io)?;
+    match report.stopped {
+        Some(error) => Err(error),
+        None if report.healthy() => Ok(()),
+        None => Err(DoctorError::Unhealthy),
+    }
+}
+
+pub fn doctor_report(
+    host: &DoctorHost,
+    ctx: &TunnelContext<'_>,
+    launchd: &impl Launchctl,
+    listen: &impl ListenProbe,
+    ssh: &impl SshProbe,
+    deadlines: DoctorDeadlines,
+) -> DoctorReport {
+    let mut events = Vec::new();
+    let stopped = collect_doctor(&mut events, host, ctx, launchd, listen, ssh, deadlines).err();
+    DoctorReport { events, stopped }
+}
+
+fn unhealthy(events: &mut Vec<DoctorEvent>, text: String) {
+    events.push(DoctorEvent::Unhealthy { text });
+}
+
+fn collect_doctor(
+    events: &mut Vec<DoctorEvent>,
+    host: &DoctorHost,
+    ctx: &TunnelContext<'_>,
+    launchd: &impl Launchctl,
+    listen: &impl ListenProbe,
+    ssh: &impl SshProbe,
+    deadlines: DoctorDeadlines,
+) -> Result<(), DoctorError> {
     let ssh_state = if host.is_local {
-        writeln!(out, "SSH: skipped (current machine)").map_err(DoctorError::Io)?;
         SshState::Skipped
     } else {
         let outcome = ssh.run(
@@ -255,31 +380,22 @@ pub fn doctor(
             deadlines,
         );
         if outcome.code == 0 {
-            writeln!(out, "SSH: reachable").map_err(DoctorError::Io)?;
             SshState::Reachable
         } else {
-            match classify_ssh_stderr(&outcome.stderr) {
-                SshState::Auth => {
-                    writeln!(out, "SSH: auth failure").map_err(DoctorError::Io)?;
-                    writeln!(
-                        out,
-                        "unhealthy: SSH to {} failed authentication",
-                        host.canonical
-                    )
-                    .map_err(DoctorError::Io)?;
-                    unhealthy = true;
-                    SshState::Auth
-                }
-                _ => {
-                    writeln!(out, "SSH: unavailable").map_err(DoctorError::Io)?;
-                    writeln!(out, "unhealthy: SSH to {} is unavailable", host.canonical)
-                        .map_err(DoctorError::Io)?;
-                    unhealthy = true;
-                    SshState::Unavailable
-                }
-            }
+            classify_ssh_stderr(&outcome.stderr)
         }
     };
+    events.push(DoctorEvent::Ssh { state: ssh_state });
+    match ssh_state {
+        SshState::Auth => unhealthy(
+            events,
+            format!("SSH to {} failed authentication", host.canonical),
+        ),
+        SshState::Unavailable => {
+            unhealthy(events, format!("SSH to {} is unavailable", host.canonical))
+        }
+        SshState::Skipped | SshState::Reachable => {}
+    }
 
     if ctx.supervisor == Supervisor::Launchd {
         require_launchctl(launchd).map_err(|_| DoctorError::LaunchctlRequired)?;
@@ -287,44 +403,26 @@ pub fn doctor(
 
     let host_mappings = mappings_for_host(ctx.mappings, &host.canonical);
     if host_mappings.is_empty() {
-        if has_managed_tunnels(ctx.mappings) {
-            writeln!(out, "No managed tunnels target {}.", host.canonical)
-                .map_err(DoctorError::Io)?;
+        let text = if has_managed_tunnels(ctx.mappings) {
+            format!("No managed tunnels target {}.", host.canonical)
         } else {
-            writeln!(out, "{NO_TUNNELS_CONFIGURED}").map_err(DoctorError::Io)?;
-        }
-        return if unhealthy {
-            Err(DoctorError::Unhealthy)
-        } else {
-            Ok(())
+            NO_TUNNELS_CONFIGURED.to_string()
         };
+        events.push(DoctorEvent::Note { text });
+        return Ok(());
     }
 
     for mapping in host_mappings {
         diagnose_mapping(
-            out,
-            host,
-            mapping,
-            ctx,
-            launchd,
-            listen,
-            ssh,
-            deadlines,
-            ssh_state,
-            &mut unhealthy,
+            events, host, mapping, ctx, launchd, listen, ssh, deadlines, ssh_state,
         )?;
     }
-
-    if unhealthy {
-        Err(DoctorError::Unhealthy)
-    } else {
-        Ok(())
-    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
 fn diagnose_mapping(
-    out: &mut dyn Write,
+    events: &mut Vec<DoctorEvent>,
     host: &DoctorHost,
     mapping: &Mapping,
     ctx: &TunnelContext<'_>,
@@ -333,10 +431,10 @@ fn diagnose_mapping(
     ssh: &impl SshProbe,
     deadlines: DoctorDeadlines,
     ssh_state: SshState,
-    unhealthy: &mut bool,
 ) -> Result<(), DoctorError> {
     let obs = inspect(mapping, ctx.supervisor, ctx.uid, launchd, listen);
     let mut remote = RemoteListen::Skipped;
+    let mut probe_failure = None;
     if ssh_state == SshState::Reachable && obs.state() != SupervisorState::Paused {
         if !is_managed_remote_host(&mapping.remote_host) {
             return Err(DoctorError::InvalidRemoteHost {
@@ -357,88 +455,79 @@ fn diagnose_mapping(
             0 => RemoteListen::Listening,
             1 => RemoteListen::Down,
             code => {
-                writeln!(
-                    out,
-                    "unhealthy: remote TCP probe failed for {} (SSH/probe exit {code}); app state unknown",
+                probe_failure = Some(format!(
+                    "remote TCP probe failed for {} (SSH/probe exit {code}); app state unknown",
                     host.canonical
-                )
-                .map_err(DoctorError::Io)?;
-                *unhealthy = true;
+                ));
                 RemoteListen::Unknown
             }
         };
     }
+    if let Some(text) = probe_failure {
+        unhealthy(events, text);
+    }
 
-    writeln!(
-        out,
-        "tunnel {}: supervisor={} local={} remote={}",
-        mapping.local_port,
-        obs.state().as_str(),
-        obs.listen.as_str(),
-        remote.as_str()
-    )
-    .map_err(DoctorError::Io)?;
+    events.push(DoctorEvent::Tunnel {
+        local_port: mapping.local_port,
+        supervisor: obs.state().as_str().to_string(),
+        local: obs.listen.as_str().to_string(),
+        remote: remote.as_str().to_string(),
+    });
 
     if obs.state() == SupervisorState::Paused {
         return Ok(());
     }
     if obs.state() == SupervisorState::Unsupervised {
-        writeln!(
-            out,
-            "unhealthy: managed tunnel for local port {} is not supervised on this host",
-            mapping.local_port
-        )
-        .map_err(DoctorError::Io)?;
-        *unhealthy = true;
+        unhealthy(
+            events,
+            format!(
+                "managed tunnel for local port {} is not supervised on this host",
+                mapping.local_port
+            ),
+        );
         return Ok(());
     }
     if obs.state() != SupervisorState::Running {
-        writeln!(
-            out,
-            "unhealthy: managed tunnel for local port {} is not running",
-            mapping.local_port
-        )
-        .map_err(DoctorError::Io)?;
-        *unhealthy = true;
+        unhealthy(
+            events,
+            format!(
+                "managed tunnel for local port {} is not running",
+                mapping.local_port
+            ),
+        );
     }
     match obs.listen {
-        ListenerOwnership::Unrelated => {
-            writeln!(
-                out,
-                "unhealthy: local port {} is occupied by an unrelated process",
+        ListenerOwnership::Unrelated => unhealthy(
+            events,
+            format!(
+                "local port {} is occupied by an unrelated process",
                 mapping.local_port
-            )
-            .map_err(DoctorError::Io)?;
-            *unhealthy = true;
-        }
-        ListenerOwnership::Unknown => {
-            writeln!(
-                out,
-                "unhealthy: local port {} listener ownership could not be verified",
+            ),
+        ),
+        ListenerOwnership::Unknown => unhealthy(
+            events,
+            format!(
+                "local port {} listener ownership could not be verified",
                 mapping.local_port
-            )
-            .map_err(DoctorError::Io)?;
-            *unhealthy = true;
-        }
-        ListenerOwnership::None if obs.state() == SupervisorState::Running => {
-            writeln!(
-                out,
-                "unhealthy: managed tunnel for local port {} is not listening on 127.0.0.1",
+            ),
+        ),
+        ListenerOwnership::None if obs.state() == SupervisorState::Running => unhealthy(
+            events,
+            format!(
+                "managed tunnel for local port {} is not listening on 127.0.0.1",
                 mapping.local_port
-            )
-            .map_err(DoctorError::Io)?;
-            *unhealthy = true;
-        }
+            ),
+        ),
         ListenerOwnership::None | ListenerOwnership::Owned => {}
     }
     if remote == RemoteListen::Down {
-        writeln!(
-            out,
-            "unhealthy: remote app is not listening on {} {}:{}",
-            host.canonical, mapping.remote_host, mapping.remote_port
-        )
-        .map_err(DoctorError::Io)?;
-        *unhealthy = true;
+        unhealthy(
+            events,
+            format!(
+                "remote app is not listening on {} {}:{}",
+                host.canonical, mapping.remote_host, mapping.remote_port
+            ),
+        );
     }
     Ok(())
 }

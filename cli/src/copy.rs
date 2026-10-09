@@ -4,7 +4,7 @@
 //! while a declared remote host without a path is accepted as destination
 //! shorthand for that host's home directory. Fleet resolves only declared
 //! canonical names and aliases, then execs OpenSSH `scp` without a local
-//! shell. Recursive and remote-to-remote copies are intentionally excluded.
+//! shell. `--recursive` adds `scp -r`; remote-to-remote copies are excluded.
 
 use thiserror::Error;
 
@@ -54,6 +54,20 @@ pub fn plan_copy(
     source: &str,
     destination: &str,
 ) -> Result<PlannedCommand, CopyError> {
+    plan_copy_with(config, source, destination, CopyOptions::default())
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CopyOptions {
+    pub recursive: bool,
+}
+
+pub fn plan_copy_with(
+    config: &FleetConfig,
+    source: &str,
+    destination: &str,
+    options: CopyOptions,
+) -> Result<PlannedCommand, CopyError> {
     let source = parse_copy_endpoint(config, source, EndpointRole::Source)?;
     let destination = parse_copy_endpoint(config, destination, EndpointRole::Destination)?;
 
@@ -61,13 +75,18 @@ pub fn plan_copy(
         return Err(CopyError::RequiresLocalAndRemote);
     }
 
+    let mut args = Vec::new();
+    if options.recursive {
+        args.push("-r".to_string());
+    }
+    args.extend([
+        "--".to_string(),
+        render_copy_endpoint(source),
+        render_copy_endpoint(destination),
+    ]);
     Ok(PlannedCommand::program(
         "scp".into(),
-        vec![
-            "--".into(),
-            render_copy_endpoint(source),
-            render_copy_endpoint(destination),
-        ],
+        args,
         "copy a file between Fleet machines",
     ))
 }

@@ -15,7 +15,7 @@ use crate::config::{FleetConfig, PortError, Supervisor};
 use crate::process::{ObservedProcess, ProcessError, ProcessTable, SignalSender};
 use crate::{is_decimal, parse_decimal};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ForwardRow {
     pub pid: u32,
     pub local_port: u16,

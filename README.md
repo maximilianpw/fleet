@@ -94,8 +94,29 @@ fleet --config ./cli/examples/config.toml config validate
 
 ## Commands
 
-`fleet` with no arguments lists hosts. Other commands: `ssh`, `shell`, `run`,
-`copy`, `forward`, `t3`, `tunnel`, `doctor`, `config validate`, `completions`.
+`fleet` with no arguments lists hosts. Other commands: `status`, `agents`,
+`pick`, `ssh`, `shell`, `run`, `copy`, `ports`, `forward`, `t3`, `tunnel`,
+`doctor`, `move`, `hook`, `config validate`, `completions`.
+
+See every host at once:
+
+```sh
+fleet status                                  # presence, tmux sessions, agents
+fleet status --where long_running_agents --json
+fleet doctor                                  # all hosts, concurrently
+fleet run "$(fleet pick --where '!local,long_running_agents')" make test
+fleet ports workbox                           # listening ports to forward
+```
+
+`--where` takes a comma-separated AND of `key=value`, `key!=value`, `flag`,
+or `!flag`. Keys are `name`, `os`, `role`, `user`, `gui`,
+`long_running_agents`, `client_enrolled`, `local`, and `online`, which needs
+Tailscale. `--json` is available on `list`, `status`, `agents`, `doctor`,
+`ports`, `tunnel status`, and `forward list`.
+
+Agents report state with `fleet hook`. `fleet move workbox agents laptop`
+moves an idle agent session, with its conversation, to another host. See
+[docs/agents.md](docs/agents.md).
 
 Copy one file to or from a declared remote host with scp-style endpoints:
 
@@ -107,7 +128,7 @@ fleet copy workbox:/tmp/report.md .
 
 Canonical host names and aliases resolve through Fleet configuration. A bare
 remote destination means that host's home directory. Exactly one endpoint must
-be local; recursive and remote-to-remote copy are not supported. Fleet execs
+be local; `-r` copies directories, and remote-to-remote copy is not supported. Fleet execs
 OpenSSH `scp` directly, passes paths as argv after `--`, and relies on its
 default SFTP-backed transfer mode. Fleet does not enable legacy SCP protocol
 mode (`scp -O`).
@@ -133,6 +154,7 @@ and does not build a Darwin Rust binary.
 ## Docs
 
 - [Configuration](docs/configuration.md)
+- [Agent status and session move](docs/agents.md)
 - [Compatibility](docs/compatibility.md)
 - [Migration baseline](docs/migration-baseline.md)
 - [Monorepo migration plan](docs/monorepo-migration-plan.md)
