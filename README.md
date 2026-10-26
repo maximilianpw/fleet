@@ -204,6 +204,8 @@ is in [AGENTS.md](AGENTS.md).
 - [Agent status and session move](docs/agents.md)
 - [Compatibility](docs/compatibility.md): the behavior Fleet guarantees and
   why
+- [prox backend and ClickHouse on NixOS](docs/cliproxyapi-nixos.md): preserve
+  existing auth files while enabling database-backed quota statistics
 - [Migration baseline](docs/migration-baseline.md) and
   [monorepo migration plan](docs/monorepo-migration-plan.md)
 

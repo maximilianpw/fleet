@@ -68,6 +68,17 @@ After changing `bun.lock`, set both hashes in `nix/packages/cliproxy-ui.nix`
 to `lib.fakeHash` and rebuild to get the new values. The `--os`/`--cpu`
 overrides let both be computed on Linux.
 
+Customized proxy backend and ClickHouse integration, on Linux:
+
+```sh
+nix build path:$PWD#cliproxyapi path:$PWD#checks.x86_64-linux.cliproxyapi-nixos --no-link
+```
+
+See [docs/cliproxyapi-nixos.md](docs/cliproxyapi-nixos.md) before changing backend
+pins, runtime config, auth-directory handling, or database initialization. The
+module reuses existing runtime credentials; host adoption and activation remain
+in the consumer config. Never copy auth files or secret values into the store.
+
 `rustc --version` in `nix develop` must report 1.95.0. A newer ambient
 compiler is not the MSRV. `rust-version` in `cli/Cargo.toml` is `1.95`;
 `rust-toolchain.toml` pins `1.95.0` with rustfmt and clippy. The Nix package
@@ -89,6 +100,8 @@ launchctl, and publishing are separate approvals.
 - `services/cliproxy-quota/`: quota endpoint and `cliproxyapi-util`, run by Bun
 - `nix/packages/fleet.nix`: both binaries, completions, wrapped PATH
 - `nix/packages/cliproxy-ui.nix`: `$out/share/cliproxy-ui/management.html`
+- `nix/packages/cliproxyapi.nix`: pinned customized backend, quota schema and API docs
+- `nix/modules/cliproxyapi.nix`: backend and optional loopback ClickHouse initialization
 - `nix/packages/cliproxy-quota.nix`: `cliproxy-quota-server`, `cliproxyapi-util`
 - `nix/modules/cliproxy-quota.nix`: `nixosModules.cliproxy-quota`, unit `cliproxyapi-quota`
 - `nix/tests/cliproxy-quota.nix`: NixOS VM test for that module
