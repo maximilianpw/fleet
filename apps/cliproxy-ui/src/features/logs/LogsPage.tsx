@@ -62,7 +62,8 @@ export function LogsPage() {
   const requestLogEnabled = config?.requestLog ?? false;
 
   const [chosenTab, setActiveTab] = useState<TabType | null>(null);
-  const activeTab: TabType = chosenTab ?? (config?.loggingToFile === false ? 'errors' : 'logs');
+  const activeTab: TabType =
+    chosenTab ?? (config && config.loggingToFile !== true ? 'errors' : 'logs');
   const [searchQuery, setSearchQuery] = useState('');
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const [hideManagementLogs, setHideManagementLogs] = useLocalStorage(
