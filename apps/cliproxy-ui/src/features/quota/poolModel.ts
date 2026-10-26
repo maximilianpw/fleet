@@ -8,7 +8,7 @@ export type PoolHistory = Record<string, PoolSample[]>;
 export type PoolPoint = QuotaStatsPoint;
 export type PoolMetric = 'remaining' | 'drain' | 'burn';
 
-/** Historical rate series derived only from management-provided ClickHouse samples.
+/** Historical rate series derived only from management-provided quota samples.
  * Current metrics and remaining projections come directly from the pools endpoint. */
 export function consumptionRate(samples: PoolSample[], now: number, hours: number): number | null {
   const recent = samples.filter((sample) => sample.at >= now - hours * HOUR_MS && sample.at <= now);

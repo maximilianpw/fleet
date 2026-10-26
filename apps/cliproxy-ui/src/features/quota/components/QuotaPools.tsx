@@ -301,7 +301,7 @@ function PoolCard({
   const status = unavailable
     ? t('quota_management.pool_unavailable', {
         defaultValue:
-          'Quota history unavailable. Check the ClickHouse quota management API on the server. Accounts still shows live credential quotas.',
+          'Quota history unavailable. Accounts still shows live credential quotas.',
       })
     : loading
       ? t('quota_management.pool_loading', { defaultValue: 'Loading quota history…' })
@@ -541,7 +541,7 @@ function PoolCard({
               configured: configuredCount,
             })}
           {t('quota_management.pool_note', {
-            defaultValue: 'ClickHouse quota history',
+            defaultValue: 'Quota history',
           })}
           {pool &&
             pool.accounts.length > 0 &&

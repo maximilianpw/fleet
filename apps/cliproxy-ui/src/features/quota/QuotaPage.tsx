@@ -179,7 +179,10 @@ export function QuotaPage() {
 
   const entries = useMemo(() => classifyQuotaFiles(files), [files]);
   const tabCounts = useMemo(() => buildTabCounts(entries), [entries]);
-  const tabIds = useMemo(() => ['all', ...QUOTA_TAB_ORDER], []);
+  const tabIds = useMemo(
+    () => ['all', ...QUOTA_TAB_ORDER.filter((type) => (tabCounts[type] ?? 0) > 0)],
+    [tabCounts]
+  );
 
   /* ---------- ledger + summary ---------- */
 
@@ -433,7 +436,7 @@ export function QuotaPage() {
       <section className={styles.workbench}>
         {/* 提供商导航与搜索工具栏分层，避免不同控件争夺视觉焦点。 */}
         <div className={styles.tabsRow} data-reveal>
-          <div className={styles.providerTabs}>
+          <div>
             <ProviderTabs
               types={tabIds}
               counts={tabCounts}
