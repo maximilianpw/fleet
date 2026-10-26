@@ -1,15 +1,4 @@
-// The reference's neutral black shell is scoped to quota; other workbenches
-// retain their existing theme, layout, and navigation behavior.
-[data-theme='dark'] .quota-shell {
-  --bg-secondary: #000;
-  --bg-primary: #0e0e0e;
-  --bg-tertiary: #202020;
-  --text-primary: #f5f5f5;
-  --text-secondary: #b4b4b4;
-  --text-tertiary: #898989;
-  --border-color: #1d1d1d;
-}
-.quota-shell {
+.app-shell {
   --sidebar-panel-width: 232px;
   --shell-gutter: 16px;
   font-family:
