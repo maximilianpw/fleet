@@ -343,12 +343,16 @@
           touch "$out"
         '';
   in {
-    packages = forEachSystem (system: rec {
-      fleet = mkFleet (pkgsFor system);
-      cliproxy-ui = mkCliproxyUi (pkgsFor system);
-      cliproxy-quota = mkCliproxyQuota (pkgsFor system);
-      default = fleet;
-    });
+    packages = forEachSystem (system:
+      {
+        fleet = mkFleet (pkgsFor system);
+        cliproxy-ui = mkCliproxyUi (pkgsFor system);
+        cliproxy-quota = mkCliproxyQuota (pkgsFor system);
+        default = self.packages.${system}.fleet;
+      }
+      // lib.optionalAttrs (system == "x86_64-linux") {
+        cliproxyapi = (pkgsFor system).callPackage ./nix/packages/cliproxyapi.nix {};
+      });
 
     checks = forEachSystem (
       system: let
@@ -361,6 +365,11 @@
           cliproxy-quota = self.packages.${system}.cliproxy-quota.tests.verify;
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
+          cliproxyapi-nixos = import ./nix/tests/cliproxyapi.nix {
+            inherit pkgs;
+            module = self.nixosModules.cliproxyapi;
+            quotaModule = self.nixosModules.cliproxy-quota;
+          };
           cliproxy-quota-nixos = import ./nix/tests/cliproxy-quota.nix {
             inherit pkgs;
             module = self.nixosModules.cliproxy-quota;
@@ -380,6 +389,12 @@
     homeManagerModules.default = import ./nix/modules/home-manager.nix;
 
     # `package` defaults to this flake's build for the host platform.
+    nixosModules.cliproxyapi = {pkgs, ...}: {
+      imports = [./nix/modules/cliproxyapi.nix];
+      services.cliproxyapi.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.cliproxyapi;
+      services.cliproxyapi.uiPackage = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.cliproxy-ui;
+    };
+
     nixosModules.cliproxy-quota = {pkgs, ...}: {
       imports = [./nix/modules/cliproxy-quota.nix];
       services.cliproxyapi-quota.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.cliproxy-quota;
