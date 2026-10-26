@@ -1,0 +1,117 @@
+// The reference's neutral black shell is scoped to quota; other workbenches
+// retain their existing theme, layout, and navigation behavior.
+[data-theme='dark'] .quota-shell {
+  --bg-secondary: #000;
+  --bg-primary: #0e0e0e;
+  --bg-tertiary: #202020;
+  --text-primary: #f5f5f5;
+  --text-secondary: #b4b4b4;
+  --text-tertiary: #898989;
+  --border-color: #1d1d1d;
+}
+.quota-shell {
+  --sidebar-panel-width: 232px;
+  --shell-gutter: 16px;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, 'FreeSans', sans-serif;
+  .top-gradient-blur {
+    display: none;
+  }
+  .sidebar {
+    border: 0;
+    background: var(--bg-secondary);
+    padding: 14px 13px;
+    gap: 16px;
+  }
+  .sidebar-header {
+    border: 0;
+    padding: 0 2px;
+    margin: 0;
+    min-height: 32px;
+  }
+  .sidebar-brand {
+    gap: 10px;
+  }
+  .sidebar-brand-logo {
+    width: 30px;
+    height: 30px;
+  }
+  .sidebar-brand-title {
+    font-size: 18px;
+    font-weight: 700;
+  }
+  .sidebar-brand-subtitle,
+  .nav-group-label,
+  .nav-group-divider {
+    display: none;
+  }
+  .nav-section {
+    gap: 16px;
+  }
+  .nav-group {
+    gap: 2px;
+  }
+  .nav-item {
+    min-height: 36px;
+    padding: 8px 12px;
+    gap: 12px;
+    color: var(--text-secondary);
+    font-size: 14px;
+    font-weight: 400;
+    border: 0;
+  }
+  .nav-item.active {
+    background: var(--bg-tertiary);
+    box-shadow: none;
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+  .nav-item .nav-icon {
+    color: inherit;
+    svg {
+      width: 17px;
+      height: 17px;
+    }
+  }
+  .nav-item .nav-badge {
+    background: none;
+    font-size: 13px;
+    color: var(--text-tertiary);
+    font-weight: 400;
+  }
+  .main-header .header-actions {
+    top: 18px;
+    right: 24px;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    padding: 0;
+    gap: 8px;
+  }
+  .main-header .sidebar-toggle-floating {
+    background: var(--bg-primary);
+  }
+  .main-content {
+    padding: 65px 40px 30px 48px;
+  }
+  @media (max-width: 1100px) {
+    --sidebar-panel-width: 210px;
+    .main-content {
+      padding-left: 24px;
+      padding-right: 24px;
+    }
+  }
+  @media (max-width: 768px) {
+    .main-content {
+      padding: 76px 16px 24px;
+    }
+    .sidebar {
+      background: var(--bg-primary);
+    }
+    .main-header .header-actions {
+      top: 16px;
+      right: 12px;
+    }
+  }
+}
