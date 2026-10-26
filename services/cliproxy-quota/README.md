@@ -35,6 +35,23 @@ Moved here from `pi-config` (`cli/cliproxyapi-quota-server.ts`,
 if none is ready. Results are cached per provider for 15 seconds. Credential
 files are re-read on every uncached request. Tokens never leave the server.
 
+## Metrics
+
+`GET /metrics` returns per-account gauges in Prometheus text format, labelled
+by `provider` and `account` (the credential filename without `.json`):
+
+| Metric | Labels | Meaning |
+| --- | --- | --- |
+| `cliproxy_quota_up` | provider, account | 1 if the account's quota request succeeded |
+| `cliproxy_quota_ready` | provider, account | 1 if the provider accepts requests for it |
+| `cliproxy_quota_used_percent` | + window | Percentage of the window used |
+| `cliproxy_quota_reset_timestamp_seconds` | + window | Window reset, Unix seconds |
+
+Every scrape calls each account's provider API, uncached, so scrape every
+few minutes rather than at Prometheus' default interval. A failed account
+reports `cliproxy_quota_up 0` and no window series; an unreadable credential
+directory returns 503.
+
 The endpoint has no authentication. It only binds loopback addresses. Remote
 clients go through a reverse proxy that checks a bearer token and strips it
 before forwarding.

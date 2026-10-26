@@ -151,6 +151,35 @@ describe("credential reader", () => {
 		expect(upstreamSignal?.aborted).toBe(true);
 	});
 
+	test("reports every account across providers, marking failures without throwing", async () => {
+		await using dir = await credentialDirectory({
+			...codexAccounts,
+			"claude-main.json": { type: "claude", access_token: "claude-token" },
+			"disabled.json": { type: "xai", access_token: "t", disabled: true },
+		});
+		const { fetch } = countingFetch((url, headers) => {
+			if (url === CLAUDE_USAGE_URL) return Response.json({ seven_day: { utilization: 12 } });
+			return headers.get("chatgpt-account-id") === "ready-account"
+				? Response.json(codexPayload(5))
+				: new Response(null, { status: 401 });
+		});
+		const results = await createQuotaReader({ credentialDirectory: dir.path, fetch }).getAccountQuotas();
+
+		expect(results.sort((left, right) => left.account.localeCompare(right.account))).toEqual([
+			{
+				provider: "claude",
+				account: "claude-main",
+				quota: { ready: true, windows: [{ label: "7d", usedPercent: 12, resetAtMs: null }] },
+			},
+			{ provider: "codex", account: "exhausted", quota: null },
+			{
+				provider: "codex",
+				account: "ready",
+				quota: { ready: true, windows: [{ label: "7d", usedPercent: 5, resetAtMs: 1_788_454_137_000 }] },
+			},
+		]);
+	});
+
 	test("sends each provider's endpoint and token, and never other providers' tokens", async () => {
 		await using dir = await credentialDirectory({
 			"claude.json": { type: "claude", access_token: "claude-token" },

@@ -13,13 +13,25 @@
 import { isIP } from "node:net";
 import { parseArgs } from "node:util";
 import { createQuotaReader, type QuotaReader } from "./credentials.ts";
+import { formatQuotaMetrics, METRICS_CONTENT_TYPE } from "./metrics.ts";
 import { isQuotaProvider } from "./providers.ts";
 
 const QUOTA_PATH = /^\/quota\/v1\/([a-z]+)$/;
 
 export function createQuotaHandler(reader: QuotaReader): (request: Request) => Promise<Response> {
 	return async (request) => {
-		const match = QUOTA_PATH.exec(new URL(request.url).pathname);
+		const { pathname } = new URL(request.url);
+		if (request.method === "GET" && pathname === "/metrics") {
+			try {
+				const results = await reader.getAccountQuotas({ signal: request.signal });
+				return new Response(formatQuotaMetrics(results), {
+					headers: { "content-type": METRICS_CONTENT_TYPE, "cache-control": "no-store" },
+				});
+			} catch {
+				return new Response(null, { status: 503 });
+			}
+		}
+		const match = QUOTA_PATH.exec(pathname);
 		const provider = match?.[1];
 		if (request.method !== "GET" || !isQuotaProvider(provider)) {
 			return new Response(null, { status: 404 });
@@ -47,7 +59,7 @@ export interface ServerOptions {
 
 const USAGE = `Usage: cliproxy-quota-server --credential-dir DIR [--listen-address ADDR] [--port PORT]
 
-Serve GET /quota/v1/{claude,codex,xai} from CLIProxyAPI credential files.
+Serve GET /quota/v1/{claude,codex,xai} and GET /metrics from CLIProxyAPI credential files.
 
 Options:
   --credential-dir DIR    CLIProxyAPI auth directory (required)

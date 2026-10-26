@@ -104,6 +104,9 @@ describe("HTTP client against the server handler", () => {
 			if (provider === "claude") throw new Error("upstream down");
 			return null;
 		},
+		async getAccountQuotas() {
+			return [];
+		},
 	};
 	const handle = createQuotaHandler(reader);
 

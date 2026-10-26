@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import type { QuotaReader } from "../src/credentials.ts";
+import type { AccountQuotaResult, QuotaReader } from "../src/credentials.ts";
 import type { ProviderQuota, QuotaProvider } from "../src/providers.ts";
 import { createQuotaHandler, isLoopbackAddress, parseServerArgs, startServer } from "../src/server.ts";
 import { credentialDirectory } from "./fixtures.ts";
@@ -19,6 +19,9 @@ function stubReader(answer: (provider: QuotaProvider) => ProviderQuota | null): 
 		async getQuota(provider) {
 			asked.push(provider);
 			return answer(provider);
+		},
+		async getAccountQuotas() {
+			return [];
 		},
 	};
 }
@@ -68,10 +71,59 @@ describe("quota handler contract", () => {
 			async getQuota() {
 				throw new Error("upstream secret detail");
 			},
+			async getAccountQuotas() {
+				return [];
+			},
 		});
 		const response = await handle(new Request("http://127.0.0.1/quota/v1/claude"));
 		expect(response.status).toBe(503);
 		expect(await response.text()).toBe("");
+	});
+});
+
+describe("metrics endpoint", () => {
+	const accounts: AccountQuotaResult[] = [
+		{
+			provider: "codex",
+			account: "codex-a",
+			quota: { ready: true, windows: [{ label: "7d", usedPercent: 42, resetAtMs: 1_788_454_137_000 }] },
+		},
+		{ provider: "claude", account: "claude-b", quota: null },
+	];
+
+	function metricsReader(answer: () => Promise<AccountQuotaResult[]>): QuotaReader {
+		return {
+			async getQuota() {
+				return null;
+			},
+			getAccountQuotas: answer,
+		};
+	}
+
+	test("serves per-account gauges as Prometheus text", async () => {
+		const handle = createQuotaHandler(metricsReader(async () => accounts));
+		const response = await handle(new Request("http://127.0.0.1/metrics"));
+		expect(response.status).toBe(200);
+		expect(response.headers.get("content-type")).toBe("text/plain; version=0.0.4; charset=utf-8");
+		const body = await response.text();
+		expect(body).toContain('cliproxy_quota_used_percent{provider="codex",account="codex-a",window="7d"} 42\n');
+		expect(body).toContain('cliproxy_quota_up{provider="claude",account="claude-b"} 0\n');
+	});
+
+	test("503 with no body when credentials cannot be read", async () => {
+		const handle = createQuotaHandler(
+			metricsReader(async () => {
+				throw new Error("EACCES /secret/path");
+			}),
+		);
+		const response = await handle(new Request("http://127.0.0.1/metrics"));
+		expect(response.status).toBe(503);
+		expect(await response.text()).toBe("");
+	});
+
+	test("404 for non-GET methods", async () => {
+		const handle = createQuotaHandler(metricsReader(async () => accounts));
+		expect((await handle(new Request("http://127.0.0.1/metrics", { method: "POST" }))).status).toBe(404);
 	});
 });
 

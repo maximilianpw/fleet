@@ -27,6 +27,7 @@ export type Fetch = (url: string, init: RequestInit) => Promise<Response>;
 
 interface StoredCredential {
 	provider: QuotaProvider;
+	account: string;
 	accessToken: string;
 	accountId: string | null;
 }
@@ -44,9 +45,16 @@ export interface GetQuotaOptions {
 	signal?: AbortSignal;
 }
 
+export interface AccountQuotaResult {
+	provider: QuotaProvider;
+	account: string;
+	quota: AccountQuota | null;
+}
+
 export interface QuotaReader {
 	/** `null` when no enabled credential exists for the provider. */
 	getQuota(provider: QuotaProvider, options?: GetQuotaOptions): Promise<ProviderQuota | null>;
+	getAccountQuotas(options?: { signal?: AbortSignal }): Promise<AccountQuotaResult[]>;
 }
 
 async function readStoredCredentials(directory: string): Promise<StoredCredential[]> {
@@ -71,6 +79,7 @@ async function readStoredCredentials(directory: string): Promise<StoredCredentia
 					}
 					return {
 						provider: payload.type,
+						account: name.slice(0, -".json".length),
 						accessToken: payload.access_token,
 						accountId:
 							typeof payload.account_id === "string" && payload.account_id.length > 0
@@ -184,6 +193,22 @@ export function createQuotaReader(options: QuotaReaderOptions): QuotaReader {
 			};
 			cache.set(provider, quota);
 			return quota;
+		},
+
+		async getAccountQuotas(requestOptions = {}) {
+			const credentials = await readStoredCredentials(options.credentialDirectory);
+			const signal = requestSignal(requestOptions.signal, requestTimeoutMs);
+			const results = await Promise.allSettled(
+				credentials.map((credential) => fetchAccountQuota(fetchImplementation, credential, signal)),
+			);
+			return credentials.map((credential, index) => {
+				const result = results[index];
+				return {
+					provider: credential.provider,
+					account: credential.account,
+					quota: result?.status === "fulfilled" ? result.value : null,
+				};
+			});
 		},
 	};
 }

@@ -45,7 +45,7 @@ in {
     port = mkOption {
       type = types.port;
       default = 8318;
-      description = "TCP port for `GET /quota/v1/{claude,codex,xai}`.";
+      description = "TCP port for `GET /quota/v1/{claude,codex,xai}` and `GET /metrics`.";
     };
   };
 

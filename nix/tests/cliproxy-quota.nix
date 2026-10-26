@@ -50,6 +50,10 @@ pkgs.testers.runNixOSTest {
         assert status("/quota/v1/claude") == "503"
         assert status("/quota/v1/xai") == "404"
 
+    with subtest("metrics report the unreachable account as down"):
+        metrics = machine.succeed("curl -sf http://127.0.0.1:8318/metrics")
+        assert 'cliproxy_quota_up{provider="claude",account="claude"} 0' in metrics, metrics
+
     with subtest("the service cannot write its home"):
         machine.succeed(
             "systemctl show -P ProtectHome cliproxyapi-quota | grep -qx read-only",
