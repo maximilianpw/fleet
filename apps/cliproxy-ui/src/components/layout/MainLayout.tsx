@@ -50,6 +50,7 @@ import { LANGUAGE_LABEL_KEYS, LANGUAGE_ORDER } from '@/utils/constants';
 import { isSupportedLanguage } from '@/utils/language';
 import { getSidebarShortcutLabel, isSidebarToggleShortcut } from '@/utils/sidebarShortcut';
 import type { Theme } from '@/types';
+import '@/features/quota/quotaShell.scss';
 
 const sidebarIcons: Record<string, ReactNode> = {
   dashboard: <IconSidebarDashboard size={18} />,
@@ -348,6 +349,7 @@ export function MainLayout() {
   const fullBrandName = 'CLI Proxy API Management Center';
   const abbrBrandName = t('title.abbr');
   const isLogsPage = location.pathname.startsWith('/logs');
+  const isQuotaPage = location.pathname.startsWith('/quota');
   const isPluginResourcePage = location.pathname.startsWith('/plugin-pages');
   const showSidebarLabels = !sidebarCollapsed || sidebarOpen;
 
@@ -590,6 +592,19 @@ export function MainLayout() {
           metaKey: 'nav_meta.dashboard',
           icon: sidebarIcons.dashboard,
         },
+        ...(isQuotaPage
+          ? [
+              {
+                path: '/quick-start',
+                label: t('nav.quick_start', { defaultValue: 'Quick Start' }),
+                icon: (
+                  <svg {...headerIconProps}>
+                    <path d="m13 2-9 12h7l-1 8 10-12h-7l1-8Z" />
+                  </svg>
+                ),
+              },
+            ]
+          : []),
       ],
     },
     {
@@ -957,7 +972,7 @@ export function MainLayout() {
 
   return (
     <div
-      className={`app-shell ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''} ${
+      className={`app-shell ${isQuotaPage ? 'quota-shell' : ''} ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''} ${
         isPluginResourcePage ? 'plugin-resource-shell' : ''
       }`}
     >
@@ -1137,10 +1152,40 @@ export function MainLayout() {
         >
           <div className="sidebar-header">
             <div className="sidebar-brand" title={fullBrandName}>
-              <img src={INLINE_LOGO_JPEG} alt="CPAMC logo" className="sidebar-brand-logo" />
+              {isQuotaPage ? (
+                <svg
+                  className="sidebar-brand-logo"
+                  viewBox="0 0 32 32"
+                  role="img"
+                  aria-label="prox"
+                >
+                  <rect width="32" height="32" rx="9" fill="#1c1c1c" />
+                  <path
+                    d="M7 8h4l8 8"
+                    stroke="#edac65"
+                    strokeWidth="3.5"
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d="M7 24h4l8-8"
+                    stroke="#83b0f7"
+                    strokeWidth="3.5"
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <path d="M7 16h18" stroke="#f1f1ef" strokeWidth="3.5" strokeLinecap="round" />
+                </svg>
+              ) : (
+                <img src={INLINE_LOGO_JPEG} alt="CPAMC logo" className="sidebar-brand-logo" />
+              )}
               {showSidebarLabels && (
                 <span className="sidebar-brand-text">
-                  <span className="sidebar-brand-title">{abbrBrandName}</span>
+                  <span className="sidebar-brand-title">
+                    {isQuotaPage ? 'prox' : abbrBrandName}
+                  </span>
                   <span className="sidebar-brand-subtitle">{t('sidebar.subtitle')}</span>
                 </span>
               )}

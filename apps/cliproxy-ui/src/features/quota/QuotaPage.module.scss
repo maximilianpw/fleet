@@ -10,6 +10,58 @@
   gap: 20px;
   width: 100%;
   min-width: 0;
+
+  [hidden] {
+    display: none;
+  }
+}
+
+.accountDetails {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.autoLoad {
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+
+.providerTabs {
+  > div {
+    border: 0;
+    gap: 4px;
+  }
+  button {
+    padding: 8px 13px;
+    border-radius: 9px;
+    font-size: 14px;
+    font-weight: 400;
+    gap: 8px;
+  }
+  button::after {
+    display: none;
+  }
+  button[aria-pressed='true'] {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+  }
+  button > span:last-child {
+    background: none;
+    font: inherit;
+    padding: 0;
+    color: var(--text-tertiary);
+  }
+  button img {
+    width: 17px;
+    height: 17px;
+  }
 }
 
 /* ---------- 工作区（tabs + 网格 + 分页） ---------- */

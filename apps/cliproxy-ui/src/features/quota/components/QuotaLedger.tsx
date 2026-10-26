@@ -27,6 +27,7 @@ const LEDGER_COLUMNS = 3;
 
 export type QuotaLedgerProps = {
   entries: QuotaFileEntry[];
+  displayNameFor?: (entry: QuotaFileEntry) => string;
   quotaFor: (entry: QuotaFileEntry) => QuotaCardState | undefined;
   ledgerFor: (entry: QuotaFileEntry) => LedgerCredential;
   /** Group rows under provider headings; off when rows are sorted across providers. */
@@ -145,7 +146,7 @@ function LedgerRow(props: LedgerRowProps) {
   // the button is permanently disabled noise on every row.
   const showClaudeReset = entry.type === 'claude' && (!claudeReset.blocked || claudeReset.busy);
 
-  const displayName = getQuotaDisplayName(entry.file);
+  const displayName = props.displayNameFor?.(entry) ?? getQuotaDisplayName(entry.file);
   const subtitle = ledger.plan ?? (grouped ? null : getTypeLabel(t, entry.type));
 
   const byKey = new Map(ledger.limits.map((limit) => [limit.key, limit]));

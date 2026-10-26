@@ -56,6 +56,35 @@ Management requests use `Authorization: Bearer <MANAGEMENT_KEY>`. Remote access 
 
 </details>
 
+### Quota pool data source
+
+The prox Quota Management overview reads the ClickHouse-backed management API in
+[maximilianpw/CLIProxyAPI](https://github.com/maximilianpw/CLIProxyAPI):
+`GET /v8/management/observability/quota/history` and
+`GET /v8/management/observability/quota/pools`. Both use the existing management
+bearer key. `src/services/api/quotaStats.ts` owns the typed client boundary;
+`useQuotaStats` cancels superseded reads and clears results across connections.
+
+The selected provider, epoch-millisecond `from`/`to` range (at most 31 days),
+`rateHours` (1/3/6), and `usageMultiplier` (0/0.5/1/2) go to the management API.
+Current remaining, capacity, burn, drain, exhaustion, and refill projections come
+from its response. Historical rate curves derive from its recorded samples only.
+Provider/account identities use `provider:auth_index`, joined to credential
+display names in the UI. Pools cover **observed accounts**, not necessarily every
+configured credential; the footer shows coverage and the latest sample time.
+The backend currently normalizes capacity to 100% per observed account, without
+the reference image's unverified Pro Max weighting.
+
+There is no production mock data, browser-local history, or fabricated fallback.
+An older backend (404), disabled ClickHouse (503), or failed query shows an
+unavailable state. An empty store shows no recorded samples. **Accounts** retains
+the existing live credential quota views and refresh/reset controls. Generic
+`api-call` quota fetches need backend-side ingestion; enabling this UI does not
+by itself populate ClickHouse. Configure ClickHouse only on the backend, using
+deployment-provided values such as `<CLICKHOUSE_URL>` and `<CLICKHOUSE_PASSWORD>`;
+never put database credentials in UI configuration. The UI integration can land
+before that backend feature is deployed.
+
 <details>
 <summary><strong>Upgrading from v7</strong></summary>
 

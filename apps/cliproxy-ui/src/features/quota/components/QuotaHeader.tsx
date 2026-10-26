@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { IconRefreshCw } from '@/components/ui/icons';
+import { IconEye, IconEyeOff, IconRefreshCw } from '@/components/ui/icons';
 import { useCountUp } from '@/hooks/motion';
 import styles from './QuotaHeader.module.scss';
 
@@ -10,8 +10,8 @@ export type QuotaHeaderProps = {
   /** Whether the list is narrowed to credentials that need attention. */
   attentionActive: boolean;
   onToggleAttention: () => void;
-  autoLoad: boolean;
-  onToggleAutoLoad: () => void;
+  showEmails: boolean;
+  onToggleEmails: () => void;
   refreshing: boolean;
   disableControls: boolean;
   onRefreshAll: () => void;
@@ -31,8 +31,8 @@ export function QuotaHeader(props: QuotaHeaderProps) {
     attentionCount,
     attentionActive,
     onToggleAttention,
-    autoLoad,
-    onToggleAutoLoad,
+    showEmails,
+    onToggleEmails,
     refreshing,
     disableControls,
     onRefreshAll,
@@ -80,11 +80,13 @@ export function QuotaHeader(props: QuotaHeaderProps) {
         <button
           type="button"
           className={styles.secondaryAction}
-          onClick={onToggleAutoLoad}
-          aria-pressed={autoLoad}
-          title={t('quota_management.auto_load_hint')}
+          onClick={onToggleEmails}
+          aria-pressed={showEmails}
         >
-          {autoLoad ? t('quota_management.auto_load_on') : t('quota_management.auto_load_off')}
+          {showEmails ? <IconEyeOff size={16} /> : <IconEye size={16} />}
+          {showEmails
+            ? t('quota_management.hide_emails', { defaultValue: 'Hide emails' })
+            : t('quota_management.show_emails', { defaultValue: 'Show emails' })}
         </button>
         <button
           type="button"
