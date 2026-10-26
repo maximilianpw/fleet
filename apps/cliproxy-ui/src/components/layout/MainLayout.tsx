@@ -15,6 +15,7 @@ import { NavLink, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { PageTransition } from '@/components/common/PageTransition';
+import { ProxLogo } from '@/components/ui/ProxLogo';
 import { MainRoutes } from '@/router/MainRoutes';
 import { authFilesApi, pluginsApi } from '@/services/api';
 import {
@@ -1136,26 +1137,7 @@ export function MainLayout() {
         >
           <div className="sidebar-header">
             <div className="sidebar-brand" title="prox">
-              <svg className="sidebar-brand-logo" viewBox="0 0 32 32" role="img" aria-label="prox">
-                <rect width="32" height="32" rx="9" fill="#1c1c1c" />
-                <path
-                  d="M7 8h4l8 8"
-                  stroke="#edac65"
-                  strokeWidth="3.5"
-                  fill="none"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <path
-                  d="M7 24h4l8-8"
-                  stroke="#83b0f7"
-                  strokeWidth="3.5"
-                  fill="none"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <path d="M7 16h18" stroke="#f1f1ef" strokeWidth="3.5" strokeLinecap="round" />
-              </svg>
+              <ProxLogo className="sidebar-brand-logo" />
               {showSidebarLabels && (
                 <span className="sidebar-brand-text">
                   <span className="sidebar-brand-title">prox</span>
