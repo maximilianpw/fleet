@@ -4,8 +4,9 @@
   ...
 }: let
   cfg = config.services.cliproxyapi-quota;
-  inherit (lib) getExe' hasPrefix mkEnableOption mkIf mkOption types;
+  inherit (lib) getExe' hasPrefix mkEnableOption mkIf mkOption optionals types;
   isLoopback = address: hasPrefix "127." address || address == "::1";
+  loopbackUrl = types.strMatching "https?://(127[.][0-9.]+|[[]::1])(:[0-9]+)?/?";
 in {
   options.services.cliproxyapi-quota = {
     enable = mkEnableOption "the CLIProxyAPI quota-only loopback endpoint";
@@ -47,6 +48,30 @@ in {
       default = 8318;
       description = "TCP port for `GET /quota/v1/{claude,codex,xai}` and `GET /metrics`.";
     };
+
+    history = mkOption {
+      default = null;
+      description = ''
+        Serve `GET /observability/quota/{history,pools}`, the prox UI's quota
+        history contract, from a Prometheus that scrapes this service's
+        `/metrics`. Requests are authenticated by forwarding their
+        `Authorization` header to CLIProxyAPI's management API.
+      '';
+      type = types.nullOr (types.submodule {
+        options = {
+          prometheusUrl = mkOption {
+            type = loopbackUrl;
+            example = "http://127.0.0.1:9090";
+            description = "Loopback Prometheus base URL.";
+          };
+          managementUrl = mkOption {
+            type = loopbackUrl;
+            example = "http://127.0.0.1:8317";
+            description = "Loopback CLIProxyAPI base URL.";
+          };
+        };
+      });
+    };
   };
 
   config = mkIf cfg.enable {
@@ -64,15 +89,21 @@ in {
       after = ["network-online.target"];
       serviceConfig = {
         User = cfg.user;
-        ExecStart = lib.escapeShellArgs [
-          (getExe' cfg.package "cliproxy-quota-server")
-          "--credential-dir"
-          cfg.credentialDirectory
-          "--listen-address"
-          cfg.listenAddress
-          "--port"
-          (toString cfg.port)
-        ];
+        ExecStart = lib.escapeShellArgs ([
+            (getExe' cfg.package "cliproxy-quota-server")
+            "--credential-dir"
+            cfg.credentialDirectory
+            "--listen-address"
+            cfg.listenAddress
+            "--port"
+            (toString cfg.port)
+          ]
+          ++ optionals (cfg.history != null) [
+            "--prometheus-url"
+            cfg.history.prometheusUrl
+            "--management-url"
+            cfg.history.managementUrl
+          ]);
         Restart = "always";
         RestartSec = 5;
 

@@ -7,7 +7,7 @@
  *     404 unknown path, non-GET method, or no credential for the provider
  *     503 every upstream quota request failed or timed out
  *
- * There is no authentication here. The listener must stay on loopback; a
+ * /quota/v1 and /metrics have no authentication here. The listener must stay on loopback; a
  * reverse proxy authenticates public clients before forwarding.
  */
 import { isIP } from "node:net";
@@ -15,12 +15,22 @@ import { parseArgs } from "node:util";
 import { createQuotaReader, type QuotaReader } from "./credentials.ts";
 import { formatQuotaMetrics, METRICS_CONTENT_TYPE } from "./metrics.ts";
 import { isQuotaProvider } from "./providers.ts";
+import { createQuotaHistoryHandler, QUOTA_HISTORY_PATH } from "./quotaHistory.ts";
 
 const QUOTA_PATH = /^\/quota\/v1\/([a-z]+)$/;
 
-export function createQuotaHandler(reader: QuotaReader): (request: Request) => Promise<Response> {
+export type QuotaHistoryHandler = (request: Request, kind: "history" | "pools") => Promise<Response>;
+
+export function createQuotaHandler(
+	reader: QuotaReader,
+	quotaHistory?: QuotaHistoryHandler,
+): (request: Request) => Promise<Response> {
 	return async (request) => {
 		const { pathname } = new URL(request.url);
+		const historyKind = QUOTA_HISTORY_PATH.exec(pathname)?.[1];
+		if (request.method === "GET" && quotaHistory !== undefined && (historyKind === "history" || historyKind === "pools")) {
+			return quotaHistory(request, historyKind);
+		}
 		if (request.method === "GET" && pathname === "/metrics") {
 			try {
 				const results = await reader.getAccountQuotas({ signal: request.signal });
@@ -51,20 +61,36 @@ export function isLoopbackAddress(address: string): boolean {
 	return address === "::1";
 }
 
+export function isLoopbackUrl(value: string): boolean {
+	try {
+		const url = new URL(value);
+		const host = url.hostname.replace(/^\[(.*)\]$/, "$1");
+		return (url.protocol === "http:" || url.protocol === "https:") && isLoopbackAddress(host);
+	} catch {
+		return false;
+	}
+}
+
 export interface ServerOptions {
 	credentialDirectory: string;
 	listenAddress: string;
 	port: number;
+	history: { prometheusUrl: string; managementUrl: string } | null;
 }
 
 const USAGE = `Usage: cliproxy-quota-server --credential-dir DIR [--listen-address ADDR] [--port PORT]
+                            [--prometheus-url URL --management-url URL]
 
 Serve GET /quota/v1/{claude,codex,xai} and GET /metrics from CLIProxyAPI credential files.
+With both URLs, also serve GET /observability/quota/{history,pools} from Prometheus,
+authenticated against CLIProxyAPI's management API.
 
 Options:
   --credential-dir DIR    CLIProxyAPI auth directory (required)
   --listen-address ADDR   Loopback IP literal (default 127.0.0.1)
-  --port PORT             TCP port (default 8318)`;
+  --port PORT             TCP port (default 8318)
+  --prometheus-url URL    Loopback Prometheus base URL scraping /metrics
+  --management-url URL    Loopback CLIProxyAPI base URL`;
 
 export function parseServerArgs(args: readonly string[]): ServerOptions | { error: string } | "help" {
 	let values;
@@ -75,6 +101,8 @@ export function parseServerArgs(args: readonly string[]): ServerOptions | { erro
 				"credential-dir": { type: "string" },
 				"listen-address": { type: "string", default: "127.0.0.1" },
 				port: { type: "string", default: "8318" },
+				"prometheus-url": { type: "string" },
+				"management-url": { type: "string" },
 				help: { type: "boolean", short: "h" },
 			},
 			strict: true,
@@ -97,12 +125,27 @@ export function parseServerArgs(args: readonly string[]): ServerOptions | { erro
 	if (!Number.isInteger(port) || port < 1 || port > 65_535) {
 		return { error: `--port must be 1..65535, got ${values.port}` };
 	}
-	return { credentialDirectory, listenAddress, port };
+	const prometheusUrl = values["prometheus-url"];
+	const managementUrl = values["management-url"];
+	if ((prometheusUrl === undefined) !== (managementUrl === undefined)) {
+		return { error: "--prometheus-url and --management-url must be given together" };
+	}
+	for (const url of [prometheusUrl, managementUrl]) {
+		if (url !== undefined && !isLoopbackUrl(url)) {
+			return { error: `quota history URLs must be loopback http(s) URLs, got ${url}` };
+		}
+	}
+	const history =
+		prometheusUrl === undefined || managementUrl === undefined
+			? null
+			: { prometheusUrl: prometheusUrl.replace(/\/+$/, ""), managementUrl: managementUrl.replace(/\/+$/, "") };
+	return { credentialDirectory, listenAddress, port, history };
 }
 
 export function startServer(options: ServerOptions): ReturnType<typeof Bun.serve> {
 	const handle = createQuotaHandler(
 		createQuotaReader({ credentialDirectory: options.credentialDirectory }),
+		options.history === null ? undefined : createQuotaHistoryHandler(options.history),
 	);
 	return Bun.serve({
 		hostname: options.listenAddress,

@@ -52,7 +52,28 @@ few minutes rather than at Prometheus' default interval. A failed account
 reports `cliproxy_quota_up 0` and no window series; an unreadable credential
 directory returns 503.
 
-The endpoint has no authentication. It only binds loopback addresses. Remote
+## Quota history
+
+With `--prometheus-url` and `--management-url` (both loopback), the server
+also serves the prox UI's quota history contract from the Prometheus series
+above, in place of the ClickHouse backend:
+
+- `GET /observability/quota/history`
+- `GET /observability/quota/pools`
+
+Parameters, response shapes and status codes follow CLIProxyAPI's
+`docs/quota-statistics.md`: `from`/`to` in epoch milliseconds (default the
+last 24 hours, at most 31 days), `provider`, `account`, `rateHours` 1/3/6 and
+`usageMultiplier` 0/0.5/1/2. Each account contributes its longest recognized
+window (7d over 5h). Accounts are identified by their CLIProxyAPI
+`auth_index`, read from `GET /v8/management/credentials`.
+
+Requests forward their `Authorization` header to that management endpoint,
+so the management key is checked by CLIProxyAPI itself and its 401, 403 or
+404 is returned unchanged. Route `/v8/management/observability/quota/` here
+from the reverse proxy that fronts the management API.
+
+The `/quota/v1` and `/metrics` endpoints have no authentication. It only binds loopback addresses. Remote
 clients go through a reverse proxy that checks a bearer token and strips it
 before forwarding.
 

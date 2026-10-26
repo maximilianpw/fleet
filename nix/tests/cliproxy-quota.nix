@@ -16,6 +16,10 @@ pkgs.testers.runNixOSTest {
       inherit package;
       user = "alice";
       credentialDirectory = "/home/alice/.cli-proxy-api";
+      history = {
+        prometheusUrl = "http://127.0.0.1:9";
+        managementUrl = "http://127.0.0.1:9";
+      };
     };
     environment.systemPackages = [package pkgs.curl];
   };
@@ -49,6 +53,10 @@ pkgs.testers.runNixOSTest {
         )
         assert status("/quota/v1/claude") == "503"
         assert status("/quota/v1/xai") == "404"
+
+    with subtest("quota history is routed, and an unreachable management API is a 502"):
+        assert status("/observability/quota/pools") == "502"
+        assert status("/observability/quota/pools", "POST") == "404"
 
     with subtest("metrics report the unreachable account as down"):
         metrics = machine.succeed("curl -sf http://127.0.0.1:8318/metrics")

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { AccountQuotaResult, QuotaReader } from "../src/credentials.ts";
 import type { ProviderQuota, QuotaProvider } from "../src/providers.ts";
-import { createQuotaHandler, isLoopbackAddress, parseServerArgs, startServer } from "../src/server.ts";
+import { createQuotaHandler, isLoopbackAddress, isLoopbackUrl, parseServerArgs, startServer } from "../src/server.ts";
 import { credentialDirectory } from "./fixtures.ts";
 
 const codexQuota: ProviderQuota = {
@@ -127,12 +127,40 @@ describe("metrics endpoint", () => {
 	});
 });
 
+describe("quota history routing", () => {
+	const reader: QuotaReader = {
+		async getQuota() {
+			return null;
+		},
+		async getAccountQuotas() {
+			return [];
+		},
+	};
+
+	test("routes GET history and pools to the history handler only when configured", async () => {
+		const kinds: string[] = [];
+		const handle = createQuotaHandler(reader, async (_request, kind) => {
+			kinds.push(kind);
+			return new Response(null, { status: 204 });
+		});
+		expect((await handle(new Request("http://127.0.0.1/observability/quota/history?from=1"))).status).toBe(204);
+		expect((await handle(new Request("http://127.0.0.1/observability/quota/pools"))).status).toBe(204);
+		expect((await handle(new Request("http://127.0.0.1/observability/quota/pools", { method: "POST" }))).status).toBe(404);
+		expect((await handle(new Request("http://127.0.0.1/observability/quota/other"))).status).toBe(404);
+		expect(kinds).toEqual(["history", "pools"]);
+
+		const unconfigured = createQuotaHandler(reader);
+		expect((await unconfigured(new Request("http://127.0.0.1/observability/quota/history"))).status).toBe(404);
+	});
+});
+
 describe("argument validation", () => {
 	test("requires a credential directory and a loopback listener", () => {
 		expect(parseServerArgs(["--credential-dir", "/srv/auth"])).toEqual({
 			credentialDirectory: "/srv/auth",
 			listenAddress: "127.0.0.1",
 			port: 8318,
+			history: null,
 		});
 		expect(parseServerArgs([])).toEqual({ error: "--credential-dir is required" });
 		expect(parseServerArgs(["--credential-dir", "/a", "--listen-address", "0.0.0.0"])).toHaveProperty("error");
@@ -140,6 +168,19 @@ describe("argument validation", () => {
 		expect(parseServerArgs(["--credential-dir", "/a", "--port", "70000"])).toHaveProperty("error");
 		expect(parseServerArgs(["--credential-dir", "/a", "--unknown"])).toHaveProperty("error");
 		expect(parseServerArgs(["--help"])).toBe("help");
+	});
+
+	test("quota history needs both loopback URLs", () => {
+		const base = ["--credential-dir", "/a"];
+		expect(
+			parseServerArgs([...base, "--prometheus-url", "http://127.0.0.1:9090/", "--management-url", "http://[::1]:8317"]),
+		).toMatchObject({ history: { prometheusUrl: "http://127.0.0.1:9090", managementUrl: "http://[::1]:8317" } });
+		expect(parseServerArgs([...base, "--prometheus-url", "http://127.0.0.1:9090"])).toHaveProperty("error");
+		expect(
+			parseServerArgs([...base, "--prometheus-url", "http://127.0.0.1:9090", "--management-url", "https://proxy.example.test"]),
+		).toHaveProperty("error");
+		expect(isLoopbackUrl("ftp://127.0.0.1/")).toBe(false);
+		expect(isLoopbackUrl("not a url")).toBe(false);
 	});
 
 	test("loopback detection", () => {
@@ -157,7 +198,7 @@ describe("listening server", () => {
 
 	beforeAll(async () => {
 		dir = await credentialDirectory({});
-		server = startServer({ credentialDirectory: dir.path, listenAddress: "127.0.0.1", port: 0 });
+		server = startServer({ credentialDirectory: dir.path, listenAddress: "127.0.0.1", port: 0, history: null });
 	});
 
 	afterAll(async () => {
