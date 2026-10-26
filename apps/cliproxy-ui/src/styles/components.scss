@@ -73,17 +73,6 @@
   }
 }
 
-[data-theme='dark'] {
-  .btn {
-    color: #fff;
-  }
-
-  .btn.btn-secondary,
-  .btn.btn-ghost {
-    color: #fff;
-  }
-}
-
 .input,
 textarea {
   width: 100%;
@@ -123,8 +112,7 @@ textarea {
 .card {
   background-color: var(--bg-primary);
   border: 1px solid var(--border-color);
-  border-radius: $radius-lg;
-  box-shadow: var(--shadow);
+  border-radius: 11px;
   padding: $spacing-lg;
 }
 

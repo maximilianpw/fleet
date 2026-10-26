@@ -50,6 +50,7 @@
 
 .root input:checked + .track .thumb {
   transform: translateX(20px);
+  background: var(--primary-contrast);
 }
 
 .label {

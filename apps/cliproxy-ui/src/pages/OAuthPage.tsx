@@ -6,16 +6,12 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { IconPlug } from '@/components/ui/icons';
 import { useAuthStore, useNotificationStore, useThemeStore } from '@/stores';
-import { oauthApi, pluginsApi, type BuiltInOAuthProvider } from '@/services/api';
+import { authFilesApi, oauthApi, pluginsApi, type BuiltInOAuthProvider } from '@/services/api';
 import { vertexApi, type VertexImportResponse } from '@/services/api/vertex';
 import { copyToClipboard } from '@/utils/clipboard';
 import { getErrorMessage, isRecord } from '@/utils/helpers';
 import { notifyAuthFilesChanged } from '@/features/authFiles/authFilesEvents';
 import { getPluginTitle, resolvePluginAssetURL } from '@/features/plugins/pluginResources';
-import {
-  KIMI_CHINESE_AFFILIATE_URL,
-  KIMI_INTERNATIONAL_AFFILIATE_URL,
-} from '@/features/providers/kimi';
 import type { PluginListEntry } from '@/types';
 import { createOAuthAttempts, type OAuthAttempt } from './oauthAttempts';
 import { validateDevinCallback } from './devinOAuth';
@@ -138,6 +134,10 @@ const PROVIDERS: BuiltInOAuthProviderCard[] = [
 const BUILTIN_PROVIDER_IDS = new Set<string>(PROVIDERS.map((provider) => provider.id));
 const CALLBACK_SUPPORTED = new Set<string>(['codex', 'anthropic', 'antigravity', 'xai', 'devin']);
 const XAI_CALLBACK_URL = 'http://127.0.0.1:56121/callback';
+const CREDENTIAL_TYPE_BY_PROVIDER: Record<string, string> = {
+  anthropic: 'claude',
+  'kimi-ai': 'kimi',
+};
 const SUCCESS_RESET_DELAY_MS = 5000;
 const getProviderI18nPrefix = (provider: string) => provider.replace('-', '_');
 const getAuthKey = (provider: string, suffix: string) =>
@@ -339,6 +339,28 @@ export function OAuthPage() {
     () => [...PROVIDERS, ...pluginProviders],
     [pluginProviders]
   );
+
+  const [accountCounts, setAccountCounts] = useState<Map<string, number>>(() => new Map());
+  useEffect(() => {
+    let cancelled = false;
+    authFilesApi
+      .list()
+      .then((response) => {
+        if (cancelled) return;
+        const counts = new Map<string, number>();
+        response.files.forEach((file) => {
+          const type = String(file.type ?? '').toLowerCase();
+          counts.set(type, (counts.get(type) ?? 0) + 1);
+        });
+        setAccountCounts(counts);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [apiBase]);
+  const accountCountFor = (provider: OAuthProviderCard) =>
+    accountCounts.get(CREDENTIAL_TYPE_BY_PROVIDER[provider.id] ?? provider.id) ?? 0;
 
   const getProviderTitleText = (provider: OAuthProviderCard) =>
     provider.kind === 'plugin'
@@ -661,10 +683,9 @@ export function OAuthPage() {
     }
   };
 
-  const renderOAuthProviderCard = (provider: OAuthProviderCard, featured = false) => {
+  const renderOAuthProviderCard = (provider: OAuthProviderCard) => {
     const state = states[provider.id] || {};
-    const showKimiSignUp =
-      featured && provider.kind === 'builtin' && ['kimi', 'kimi-ai'].includes(provider.id);
+    const accounts = accountCountFor(provider);
     const canSubmitCallback =
       (provider.kind === 'plugin' || CALLBACK_SUPPORTED.has(provider.id)) && Boolean(state.url);
     const loginButtonLabel =
@@ -682,48 +703,35 @@ export function OAuthPage() {
     return (
       <Card
         key={provider.id}
-        className={featured ? styles.featuredCard : undefined}
         title={
           <span className={styles.cardTitle}>
             <OAuthProviderIcon provider={provider} theme={resolvedTheme} />
             <span>{getProviderTitleText(provider)}</span>
+            {accounts > 0 && (
+              <span className={styles.accountCount}>
+                {accounts === 1
+                  ? t('auth_login.account_count_one', { defaultValue: '1 account' })
+                  : t('auth_login.account_count', {
+                      count: accounts,
+                      defaultValue: '{{count}} accounts',
+                    })}
+              </span>
+            )}
           </span>
         }
         extra={
-          showKimiSignUp ? (
-            <div className={styles.featuredActions}>
-              <Button
-                onClick={() =>
-                  window.open(
-                    provider.id === 'kimi-ai'
-                      ? KIMI_INTERNATIONAL_AFFILIATE_URL
-                      : KIMI_CHINESE_AFFILIATE_URL,
-                    '_blank',
-                    'noopener,noreferrer'
-                  )
-                }
-              >
-                {t('auth_login.kimi_sign_up_button')}
-              </Button>
-              <Button onClick={() => startAuth(provider.id)} loading={state.polling}>
-                {loginButtonLabel}
-              </Button>
-            </div>
-          ) : (
-            <Button
-              onClick={() => startAuth(provider.id)}
-              loading={state.polling}
-              disabled={provider.id === 'devin' && Boolean(state.state)}
-            >
-              {loginButtonLabel}
-            </Button>
-          )
+          <Button
+            variant={accounts > 0 ? 'primary' : 'secondary'}
+            onClick={() => startAuth(provider.id)}
+            loading={state.polling}
+            disabled={provider.id === 'devin' && Boolean(state.state)}
+          >
+            {loginButtonLabel}
+          </Button>
         }
       >
         <div className={styles.cardContent}>
-          <div className={featured ? styles.featuredHint : styles.cardHint}>
-            {getProviderText(provider, 'oauth_hint')}
-          </div>
+          <div className={styles.cardHint}>{getProviderText(provider, 'oauth_hint')}</div>
           {state.url && (
             <div className={styles.authUrlBox}>
               <div className={styles.authUrlLabel}>
@@ -853,28 +861,32 @@ export function OAuthPage() {
     );
   };
 
-  const featuredProviders = providerCards.filter((provider) =>
-    ['kimi', 'kimi-ai'].includes(provider.id)
-  );
-  const otherOAuthProviders = providerCards.filter(
-    (provider) => !['kimi', 'kimi-ai'].includes(provider.id)
-  );
+  const yourProviders = providerCards
+    .filter((provider) => accountCountFor(provider) > 0)
+    .sort((left, right) => accountCountFor(right) - accountCountFor(left));
+  const otherProviders = providerCards.filter((provider) => accountCountFor(provider) === 0);
 
   return (
     <div className={styles.container}>
       <h1 className={styles.pageTitle}>{t('nav.oauth', { defaultValue: 'OAuth' })}</h1>
 
       <div className={styles.content}>
-        <section className={styles.providerSection}>
-          <div className={styles.providerList}>
-            {featuredProviders.map((provider) => renderOAuthProviderCard(provider, true))}
-          </div>
-        </section>
+        {yourProviders.length > 0 && (
+          <section className={styles.providerSection}>
+            <h2 className={styles.sectionTitle}>
+              {t('auth_login.your_providers', { defaultValue: 'Your providers' })}
+            </h2>
+            <div className={styles.providerList}>{yourProviders.map(renderOAuthProviderCard)}</div>
+          </section>
+        )}
 
         <section className={styles.providerSection}>
-          <div className={styles.providerList}>
-            {otherOAuthProviders.map((provider) => renderOAuthProviderCard(provider))}
-          </div>
+          {yourProviders.length > 0 && (
+            <h2 className={styles.sectionTitle}>
+              {t('auth_login.other_providers', { defaultValue: 'Other providers' })}
+            </h2>
+          )}
+          <div className={styles.providerList}>{otherProviders.map(renderOAuthProviderCard)}</div>
         </section>
 
         {/* Vertex JSON 登录 */}
