@@ -77,7 +77,7 @@ export function QuotaPage() {
   const [files, setFiles] = useState<AuthFileItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [tab, setTab] = useState<QuotaTabId>(() => readQuotaUiState()?.tab ?? 'all');
+  const [storedTab, setTab] = useState<QuotaTabId>(() => readQuotaUiState()?.tab ?? 'all');
   const [sortMode, setSortMode] = useState<QuotaSortMode>(
     () => readQuotaUiState()?.sortMode ?? 'default'
   );
@@ -183,6 +183,7 @@ export function QuotaPage() {
     () => ['all', ...QUOTA_TAB_ORDER.filter((type) => (tabCounts[type] ?? 0) > 0)],
     [tabCounts]
   );
+  const tab: QuotaTabId = tabIds.includes(storedTab) ? storedTab : 'all';
 
   /* ---------- ledger + summary ---------- */
 
@@ -436,7 +437,7 @@ export function QuotaPage() {
       <section className={styles.workbench}>
         {/* 提供商导航与搜索工具栏分层，避免不同控件争夺视觉焦点。 */}
         <div className={styles.tabsRow} data-reveal>
-          <div>
+          <div className={styles.providerTabs}>
             <ProviderTabs
               types={tabIds}
               counts={tabCounts}

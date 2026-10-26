@@ -81,18 +81,18 @@
   .main-header .sidebar-toggle-floating {
     background: var(--bg-primary);
   }
-  .main-content {
+  .main-content:not(.main-content-plugin-resource):not(.main-content-logs) {
     padding: 65px 40px 30px 48px;
   }
   @media (max-width: 1100px) {
     --sidebar-panel-width: 210px;
-    .main-content {
+    .main-content:not(.main-content-plugin-resource):not(.main-content-logs) {
       padding-left: 24px;
       padding-right: 24px;
     }
   }
   @media (max-width: 768px) {
-    .main-content {
+    .main-content:not(.main-content-plugin-resource):not(.main-content-logs) {
       padding: 76px 16px 24px;
     }
     .sidebar {

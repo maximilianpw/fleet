@@ -14,6 +14,7 @@ import {
 import { QUOTA_PROVIDER_ACCENTS, QUOTA_TAB_ORDER } from '@/features/quota/constants';
 import { QuotaProviderIcon } from '@/features/quota/components/QuotaProviderIcon';
 import { useQuotaStats } from '@/features/quota/hooks/useQuotaStats';
+import { classifyQuotaFiles } from '@/features/quota/logic';
 import type { QuotaProviderType } from '@/features/quota/providers/types';
 import { useDashboardOverview } from './hooks/useDashboardOverview';
 import { Meter } from './components/Meter';
@@ -57,13 +58,14 @@ export function DashboardPage() {
   const quotaStats = useQuotaStats(quotaQuery, now);
 
   const quotaProviders = useMemo(() => {
-    const present = new Set((authFiles ?? []).map((file) => String(file.type ?? '')));
+    const present = new Set(classifyQuotaFiles(authFiles ?? []).map((entry) => entry.type));
     return QUOTA_TAB_ORDER.filter((provider) => present.has(provider));
   }, [authFiles]);
 
   const attention = useMemo(
     () =>
       (authFiles ?? []).filter(isProblemAuthFile).map((file) => ({
+        key: file.name,
         name: file.email || file.name,
         provider: String(file.type ?? ''),
         message: getAuthFileStatusMessage(file) || t('dashboard.health_unavailable'),
@@ -265,7 +267,7 @@ export function DashboardPage() {
           ) : (
             <ul className={styles.attention}>
               {attention.map((item) => (
-                <li key={`${item.provider}:${item.name}`}>
+                <li key={item.key}>
                   <span className={styles.providerName}>
                     {isQuotaProvider(item.provider) && (
                       <QuotaProviderIcon provider={item.provider} resolvedTheme={resolvedTheme} />
@@ -367,7 +369,7 @@ function PoolTile({
           <dl className={styles.poolFacts}>
             <div>
               <dt>{t('dashboard.pool_burn', { defaultValue: 'Burn' })}</dt>
-              <dd>{pool?.burn == null ? DASH : `${Math.round(pool.burn * 10) / 10}%/h`}</dd>
+              <dd>{pool?.drain == null ? DASH : `${Math.round(pool.drain * 10) / 10}%/h`}</dd>
             </div>
             <div>
               <dt>{t('dashboard.pool_reset', { defaultValue: 'Next reset' })}</dt>

@@ -10,9 +10,13 @@ import { authFilesApi, oauthApi, pluginsApi, type BuiltInOAuthProvider } from '@
 import { vertexApi, type VertexImportResponse } from '@/services/api/vertex';
 import { copyToClipboard } from '@/utils/clipboard';
 import { getErrorMessage, isRecord } from '@/utils/helpers';
-import { notifyAuthFilesChanged } from '@/features/authFiles/authFilesEvents';
+import {
+  AUTH_FILES_CHANGED_EVENT,
+  notifyAuthFilesChanged,
+} from '@/features/authFiles/authFilesEvents';
+import { resolveAuthProvider } from '@/utils/quota/validators';
 import { getPluginTitle, resolvePluginAssetURL } from '@/features/plugins/pluginResources';
-import type { PluginListEntry } from '@/types';
+import type { AuthFileItem, PluginListEntry } from '@/types';
 import { createOAuthAttempts, type OAuthAttempt } from './oauthAttempts';
 import { validateDevinCallback } from './devinOAuth';
 import styles from './OAuthPage.module.scss';
@@ -136,7 +140,14 @@ const CALLBACK_SUPPORTED = new Set<string>(['codex', 'anthropic', 'antigravity',
 const XAI_CALLBACK_URL = 'http://127.0.0.1:56121/callback';
 const CREDENTIAL_TYPE_BY_PROVIDER: Record<string, string> = {
   anthropic: 'claude',
-  'kimi-ai': 'kimi',
+};
+
+const credentialProvider = (file: AuthFileItem): string => {
+  const raw = String(file.provider ?? file.type ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, '-');
+  return raw === 'kimi-ai' ? raw : resolveAuthProvider(file);
 };
 const SUCCESS_RESET_DELAY_MS = 5000;
 const getProviderI18nPrefix = (provider: string) => provider.replace('-', '_');
@@ -343,20 +354,24 @@ export function OAuthPage() {
   const [accountCounts, setAccountCounts] = useState<Map<string, number>>(() => new Map());
   useEffect(() => {
     let cancelled = false;
-    authFilesApi
-      .list()
-      .then((response) => {
-        if (cancelled) return;
-        const counts = new Map<string, number>();
-        response.files.forEach((file) => {
-          const type = String(file.type ?? '').toLowerCase();
-          counts.set(type, (counts.get(type) ?? 0) + 1);
-        });
-        setAccountCounts(counts);
-      })
-      .catch(() => undefined);
+    const load = () =>
+      authFilesApi
+        .list()
+        .then((response) => {
+          if (cancelled) return;
+          const counts = new Map<string, number>();
+          response.files.forEach((file) => {
+            const provider = credentialProvider(file);
+            counts.set(provider, (counts.get(provider) ?? 0) + 1);
+          });
+          setAccountCounts(counts);
+        })
+        .catch(() => undefined);
+    void load();
+    window.addEventListener(AUTH_FILES_CHANGED_EVENT, load);
     return () => {
       cancelled = true;
+      window.removeEventListener(AUTH_FILES_CHANGED_EVENT, load);
     };
   }, [apiBase]);
   const accountCountFor = (provider: OAuthProviderCard) =>
