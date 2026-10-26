@@ -19,6 +19,8 @@ export interface Config {
   quotaExceeded?: QuotaExceededConfig;
   requestLog?: boolean;
   loggingToFile?: boolean;
+  usageStatisticsEnabled?: boolean;
+  pluginsEnabled?: boolean;
   logsMaxTotalSizeMb?: number;
   wsAuth?: boolean;
   forceModelPrefix?: boolean;

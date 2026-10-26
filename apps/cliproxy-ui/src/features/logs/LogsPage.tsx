@@ -61,7 +61,8 @@ export function LogsPage() {
   const config = useConfigStore((state) => state.config);
   const requestLogEnabled = config?.requestLog ?? false;
 
-  const [activeTab, setActiveTab] = useState<TabType>('logs');
+  const [chosenTab, setActiveTab] = useState<TabType | null>(null);
+  const activeTab: TabType = chosenTab ?? (config?.loggingToFile === false ? 'errors' : 'logs');
   const [searchQuery, setSearchQuery] = useState('');
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const [hideManagementLogs, setHideManagementLogs] = useLocalStorage(
@@ -431,15 +432,6 @@ export function LogsPage() {
               .filter(Boolean)
               .join(' ')}
           >
-            {showFileLoggingRequired && (
-              <div className="status-badge warning">
-                {t(
-                  cpaNeedsFileLogging
-                    ? 'logs.cpa_file_logging_required'
-                    : 'logs.file_logging_required'
-                )}
-              </div>
-            )}
             {error && (
               <div className="error-box" role="alert">
                 {error}

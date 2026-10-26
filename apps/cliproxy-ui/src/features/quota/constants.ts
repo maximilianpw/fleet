@@ -34,3 +34,13 @@ export type QuotaViewMode = (typeof QUOTA_VIEW_MODES)[number];
 
 /** 与 useRevealGroup 的 GROUP_MAX_TOTAL 一致：卡片级联总预算 360ms。 */
 export const CARD_ENTRANCE_BUDGET_MS = 360;
+
+export const QUOTA_PROVIDER_ACCENTS: Record<QuotaProviderType, string> = {
+  claude: '#ee9279',
+  codex: '#88b2fa',
+  antigravity: '#95c4a6',
+  xai: '#c7c7c7',
+  kimi: '#a899ef',
+  devin: '#9bcbd0',
+  meta: '#6da9f7',
+};

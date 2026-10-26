@@ -352,6 +352,10 @@ export const normalizeConfigResponse = (raw: unknown): Config => {
   config.debug = normalizeBoolean(at('observability.logs.debug'));
   config.requestLog = normalizeBoolean(at('observability.logs.request-log'));
   config.loggingToFile = normalizeBoolean(at('observability.logs.logging-to-file'));
+  config.usageStatisticsEnabled = normalizeBoolean(
+    at('observability.usage.usage-statistics-enabled')
+  );
+  config.pluginsEnabled = normalizeBoolean(at('plugins.enabled'));
   const size = at('observability.logs.logs-max-total-size-mb');
   if (typeof size === 'number') config.logsMaxTotalSizeMb = size;
   const proxy = at('requests.proxy-url');

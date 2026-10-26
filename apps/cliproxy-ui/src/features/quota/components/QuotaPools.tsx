@@ -4,7 +4,7 @@ import type { ResolvedTheme } from '@/types';
 import { getTypeLabel } from '@/features/authFiles/constants';
 import { IconChevronLeft } from '@/components/ui/icons';
 import type { QuotaStatsPool, QuotaStatsQuery } from '@/services/api/quotaStats';
-import { QUOTA_TAB_ORDER } from '../constants';
+import { QUOTA_PROVIDER_ACCENTS, QUOTA_TAB_ORDER } from '../constants';
 import { HOUR_MS, DAY_MS } from '../quotaTimelineModel';
 import { useQuotaStats } from '../hooks/useQuotaStats';
 import {
@@ -20,15 +20,6 @@ import type { QuotaProviderType } from '../providers/types';
 import { QuotaProviderIcon } from './QuotaProviderIcon';
 import styles from './QuotaPools.module.scss';
 
-const ACCENTS: Record<QuotaProviderType, string> = {
-  claude: '#ee9279',
-  codex: '#88b2fa',
-  antigravity: '#95c4a6',
-  xai: '#c7c7c7',
-  kimi: '#a899ef',
-  devin: '#9bcbd0',
-  meta: '#6da9f7',
-};
 const number = (value: number) => Math.round(value * 10) / 10;
 
 export interface QuotaPoolsProps {
@@ -326,7 +317,7 @@ function PoolCard({
   return (
     <section
       className={styles.card}
-      style={{ '--pool-accent': ACCENTS[provider] } as CSSProperties}
+      style={{ '--pool-accent': QUOTA_PROVIDER_ACCENTS[provider] } as CSSProperties}
       aria-label={`${getTypeLabel(t, provider)} quota pool`}
     >
       <div className={styles.provider}>

@@ -57,7 +57,7 @@
     "unsaved_changes_message": "You have unsaved changes. Leaving now will discard them. Do you want to leave?"
   },
   "title": {
-    "login": "CLI Proxy API Management Center",
+    "login": "prox",
     "abbr": "CPAMC"
   },
   "splash": {
@@ -98,15 +98,15 @@
   },
   "nav": {
     "dashboard": "Dashboard",
-    "ai_providers": "AI Providers",
-    "auth_files": "Auth Files",
-    "oauth": "OAuth Login",
-    "quota_management": "Quota Management",
+    "ai_providers": "Providers",
+    "auth_files": "Accounts",
+    "oauth": "Sign in",
+    "quota_management": "Quota",
     "plugins": "Plugins",
     "plugin_store": "Plugin Store",
-    "config_management": "Config Panel",
-    "logs": "Logs Viewer",
-    "system_info": "Management Center Info"
+    "config_management": "Settings",
+    "logs": "Logs",
+    "system_info": "About"
   },
   "nav_groups": {
     "operate": "Operate",
@@ -215,7 +215,7 @@
     "routing_strategy_fill_first": "fill-first (prioritize)"
   },
   "auth_files": {
-    "title": "Auth Files Management",
+    "title": "Accounts",
     "meta_total": "{{count}} credentials",
     "meta_active": "{{count}} active",
     "meta_problem": "{{count}} problem",
@@ -951,7 +951,7 @@
     "clear_search": "Clear search",
     "reading_enabled": "Continuous reading",
     "filter_load_more": "Show more matching logs",
-    "title": "Logs Viewer",
+    "title": "Logs",
     "refresh_button": "Refresh Logs",
     "clear_button": "Clear Logs",
     "fullscreen_button": "Full Screen",
@@ -977,11 +977,11 @@
     "empty_title": "No Logs Available",
     "empty_desc": "When \"Enable logging to file\" is enabled, logs will be displayed here",
     "cpa_file_logging_required": "The connected runtime is CPA. Log viewing requires logging to file to be enabled first.",
-    "cpa_file_logging_required_title": "File logging is required",
-    "cpa_file_logging_required_desc": "CPA reads this log view from local log files. Enable logging-to-file in the config, then refresh.",
+    "cpa_file_logging_required_title": "Application logs are in the system journal",
+    "cpa_file_logging_required_desc": "File logging is off, so the proxy writes its logs to stdout. Turn on Log to file in Settings to read them here; failed requests are always kept under Error Request Logs.",
     "file_logging_required": "This logs endpoint requires logging to file before file logs can be read.",
-    "file_logging_required_title": "File logging is required",
-    "file_logging_required_desc": "This logs endpoint reads local log files. Enable logging-to-file in the config, then refresh.",
+    "file_logging_required_title": "Application logs are in the system journal",
+    "file_logging_required_desc": "File logging is off, so the proxy writes its logs to stdout. Turn on Log to file in Settings to read them here; failed requests are always kept under Error Request Logs.",
     "log_content": "Log Content",
     "loading": "Loading logs...",
     "load_error": "Failed to load logs",
@@ -1018,7 +1018,7 @@
     "copy_failed": "Copy failed"
   },
   "config_management": {
-    "title": "Config Panel",
+    "title": "Settings",
     "meta_fields": "{{count}} settings",
     "meta_dirty": "{{count}} unsaved",
     "meta_dirty_source": "Unsaved source edits",
@@ -1541,7 +1541,7 @@
     "search_empty_title": "No matching accounts",
     "search_empty_desc": "Try another filename or email, or clear the search.",
     "search_clear": "Clear search",
-    "title": "Quota Management",
+    "title": "Quota",
     "description": "Monitor OAuth quota status for Antigravity, Codex, Claude, Kimi, and xAI credentials.",
     "refresh_all_credentials": "Refresh all credentials",
     "sort_label": "Sort",
@@ -1768,8 +1768,8 @@
     "empty_src_desc": "This plugin menu does not provide an embeddable page URL."
   },
   "system_info": {
-    "title": "Management Center Info",
-    "about_title": "CLI Proxy API Management Center",
+    "title": "About",
+    "about_title": "prox",
     "models_title": "Available Models",
     "models_desc": "Shows the /models response and uses saved API keys for auth automatically.",
     "models_loading": "Loading available models...",
@@ -1930,7 +1930,7 @@
       }
     },
     "header": {
-      "title": "AI Providers",
+      "title": "Providers",
       "activeResources": "{{active}}/{{total}} active resources",
       "providerFamilies": "{{count}} provider families",
       "updatedAt": "Updated {{time}}"
