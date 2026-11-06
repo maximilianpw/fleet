@@ -8,7 +8,9 @@ describe("quota metrics", () => {
 				{
 					provider: "claude",
 					account: "main",
+					lastFetchFailed: false,
 					quota: {
+						fetchedAtMs: 1_788_450_000_400,
 						ready: false,
 						windows: [
 							{ label: "5h", usedPercent: 100, resetAtMs: 1_788_454_137_400 },
@@ -16,7 +18,7 @@ describe("quota metrics", () => {
 						],
 					},
 				},
-				{ provider: "xai", account: "spare", quota: null },
+				{ provider: "xai", account: "spare", lastFetchFailed: true, quota: null },
 			]),
 		).toBe(
 			[
@@ -27,6 +29,9 @@ describe("quota metrics", () => {
 				"# HELP cliproxy_quota_ready Whether the provider currently accepts requests for the account.",
 				"# TYPE cliproxy_quota_ready gauge",
 				'cliproxy_quota_ready{provider="claude",account="main"} 0',
+				"# HELP cliproxy_quota_fetched_timestamp_seconds Unix time of the account's latest successful quota request.",
+				"# TYPE cliproxy_quota_fetched_timestamp_seconds gauge",
+				'cliproxy_quota_fetched_timestamp_seconds{provider="claude",account="main"} 1788450000',
 				"# HELP cliproxy_quota_used_percent Percentage of the account's quota window already used.",
 				"# TYPE cliproxy_quota_used_percent gauge",
 				'cliproxy_quota_used_percent{provider="claude",account="main",window="5h"} 100',
@@ -39,12 +44,28 @@ describe("quota metrics", () => {
 		);
 	});
 
+	test("a failed refresh reports down while still exporting the last answer", () => {
+		const body = formatQuotaMetrics([
+			{
+				provider: "claude",
+				account: "main",
+				lastFetchFailed: true,
+				quota: { fetchedAtMs: 1_788_450_000_000, ready: true, windows: [{ label: "5h", usedPercent: 20, resetAtMs: null }] },
+			},
+		]);
+		expect(body).toContain('cliproxy_quota_up{provider="claude",account="main"} 0\n');
+		expect(body).toContain('cliproxy_quota_used_percent{provider="claude",account="main",window="5h"} 20\n');
+		expect(body).toContain('cliproxy_quota_fetched_timestamp_seconds{provider="claude",account="main"} 1788450000\n');
+	});
+
 	test("escapes label values and drops repeated window labels", () => {
 		const body = formatQuotaMetrics([
 			{
 				provider: "codex",
 				account: 'odd"name\\x\ny',
+				lastFetchFailed: false,
 				quota: {
+					fetchedAtMs: 0,
 					ready: true,
 					windows: [
 						{ label: "usage", usedPercent: 10, resetAtMs: null },

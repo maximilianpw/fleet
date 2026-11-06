@@ -41,17 +41,23 @@ export function formatQuotaMetrics(results: readonly AccountQuotaResult[]): stri
 		help: "Percentage of the account's quota window already used.",
 		samples: [],
 	};
+	const fetched: Family = {
+		name: "cliproxy_quota_fetched_timestamp_seconds",
+		help: "Unix time of the account's latest successful quota request.",
+		samples: [],
+	};
 	const reset: Family = {
 		name: "cliproxy_quota_reset_timestamp_seconds",
 		help: "Unix time at which the account's quota window resets.",
 		samples: [],
 	};
 
-	for (const { provider, account, quota } of results) {
+	for (const { provider, account, lastFetchFailed, quota } of results) {
 		const accountLabels = { provider, account };
-		up.samples.push({ labels: accountLabels, value: quota === null ? 0 : 1 });
+		up.samples.push({ labels: accountLabels, value: lastFetchFailed || quota === null ? 0 : 1 });
 		if (quota === null) continue;
 		ready.samples.push({ labels: accountLabels, value: quota.ready ? 1 : 0 });
+		fetched.samples.push({ labels: accountLabels, value: Math.round(quota.fetchedAtMs / 1_000) });
 
 		const seen = new Set<string>();
 		for (const window of quota.windows) {
@@ -65,5 +71,5 @@ export function formatQuotaMetrics(results: readonly AccountQuotaResult[]): stri
 		}
 	}
 
-	return `${[up, ready, used, reset].map(formatFamily).join("\n")}\n`;
+	return `${[up, ready, fetched, used, reset].map(formatFamily).join("\n")}\n`;
 }
