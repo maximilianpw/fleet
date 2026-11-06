@@ -86,9 +86,10 @@ describe("metrics endpoint", () => {
 		{
 			provider: "codex",
 			account: "codex-a",
-			quota: { ready: true, windows: [{ label: "7d", usedPercent: 42, resetAtMs: 1_788_454_137_000 }] },
+			lastFetchFailed: false,
+			quota: { fetchedAtMs: 123, ready: true, windows: [{ label: "7d", usedPercent: 42, resetAtMs: 1_788_454_137_000 }] },
 		},
-		{ provider: "claude", account: "claude-b", quota: null },
+		{ provider: "claude", account: "claude-b", lastFetchFailed: true, quota: null },
 	];
 
 	function metricsReader(answer: () => Promise<AccountQuotaResult[]>): QuotaReader {

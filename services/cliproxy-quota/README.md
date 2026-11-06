@@ -19,7 +19,7 @@ Moved here from `pi-config` (`cli/cliproxyapi-quota-server.ts`,
 | --- | --- |
 | 200 | JSON below, `cache-control: no-store` |
 | 404 | Unknown path or provider, non-GET method, or no enabled credential |
-| 503 | Every account's upstream request failed or timed out (8 s) |
+| 503 | No account has a usable answer: each upstream request failed or timed out (8 s), or is backing off with no earlier answer |
 
 ```json
 {
@@ -32,8 +32,25 @@ Moved here from `pi-config` (`cli/cliproxyapi-quota-server.ts`,
 ```
 
 `windows` describes the least-used ready account, or the least-used account
-if none is ready. Results are cached per provider for 15 seconds. Credential
-files are re-read on every uncached request. Tokens never leave the server.
+if none is ready. `fetchedAtMs` is when that account's answer was fetched,
+which may be earlier than the request. Credential files are re-read on every
+request. Tokens never leave the server.
+
+## Upstream requests
+
+Provider usage endpoints are rate-limited per account, and that limit is
+shared with the account's own clients (for example Claude Code's `/usage`).
+So `/quota/v1` and `/metrics` share one per-account cache:
+
+- Each account's provider API is called at most once per 60 seconds, and
+  concurrent callers wait on the same request. A caller that disconnects
+  stops waiting; the request still completes and fills the cache.
+- After a failure the account is not called again until a backoff passes:
+  30 s, doubling to 15 min, or the provider's `Retry-After` if longer
+  (capped at 1 h). A changed access token in the credential file ends the
+  backoff. Each failure is logged to stderr with its HTTP status.
+- During a backoff the last successful answer is served until it is 30
+  minutes old.
 
 ## Metrics
 
@@ -42,15 +59,17 @@ by `provider` and `account` (the credential filename without `.json`):
 
 | Metric | Labels | Meaning |
 | --- | --- | --- |
-| `cliproxy_quota_up` | provider, account | 1 if the account's quota request succeeded |
+| `cliproxy_quota_up` | provider, account | 1 if the account's latest quota request succeeded |
 | `cliproxy_quota_ready` | provider, account | 1 if the provider accepts requests for it |
+| `cliproxy_quota_fetched_timestamp_seconds` | provider, account | When the reported answer was fetched, Unix seconds |
 | `cliproxy_quota_used_percent` | + window | Percentage of the window used |
 | `cliproxy_quota_reset_timestamp_seconds` | + window | Window reset, Unix seconds |
 
-Every scrape calls each account's provider API, uncached, so scrape every
-few minutes rather than at Prometheus' default interval. A failed account
-reports `cliproxy_quota_up 0` and no window series; an unreadable credential
-directory returns 503.
+Scrapes use the cache above, so they never add upstream requests beyond one
+per account per minute. An account whose latest request failed reports
+`cliproxy_quota_up 0`; its ready and window series continue from the last
+answer while it is within the stale limit, and are omitted after that. An
+unreadable credential directory returns 503.
 
 ## Quota history
 

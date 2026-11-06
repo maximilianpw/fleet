@@ -58,23 +58,164 @@ describe("credential reader", () => {
 		expect(quota?.windows[0]?.usedPercent).toBe(80);
 	});
 
-	test("caches per provider until the TTL expires, and force bypasses it", async () => {
+	test("caches each account until the TTL expires", async () => {
 		await using dir = await credentialDirectory({ "a.json": codexAccounts["ready.json"] });
 		let clock = 1_000;
 		const { fetch, calls } = countingFetch(() => Response.json(codexPayload(5)));
-		const reader = createQuotaReader({ credentialDirectory: dir.path, fetch, now: () => clock, cacheTtlMs: 15_000 });
+		const reader = createQuotaReader({ credentialDirectory: dir.path, fetch, now: () => clock, cacheTtlMs: 60_000 });
 
-		await reader.getQuota("codex");
-		clock += 14_999;
-		await reader.getQuota("codex");
+		expect((await reader.getQuota("codex"))?.fetchedAtMs).toBe(1_000);
+		clock += 59_999;
+		expect((await reader.getQuota("codex"))?.fetchedAtMs).toBe(1_000);
 		expect(calls).toHaveLength(1);
 
-		await reader.getQuota("codex", { force: true });
+		clock += 1;
+		expect((await reader.getQuota("codex"))?.fetchedAtMs).toBe(61_000);
+		expect(calls).toHaveLength(2);
+	});
+
+	test("metrics and provider requests share one per-account cache", async () => {
+		await using dir = await credentialDirectory({ "claude-a.json": { type: "claude", access_token: "a" } });
+		const { fetch, calls } = countingFetch(() => Response.json({ five_hour: { utilization: 10 } }));
+		const reader = createQuotaReader({ credentialDirectory: dir.path, fetch, now: () => 0 });
+
+		await reader.getAccountQuotas();
+		await reader.getQuota("claude");
+		await reader.getAccountQuotas();
+		expect(calls).toHaveLength(1);
+	});
+
+	test("concurrent callers share one upstream request", async () => {
+		await using dir = await credentialDirectory({ "claude-a.json": { type: "claude", access_token: "a" } });
+		const { fetch, calls } = countingFetch(async () => {
+			await Bun.sleep(10);
+			return Response.json({ five_hour: { utilization: 10 } });
+		});
+		const reader = createQuotaReader({ credentialDirectory: dir.path, fetch });
+
+		const results = await Promise.all([
+			reader.getQuota("claude"),
+			reader.getQuota("claude"),
+			reader.getAccountQuotas(),
+		]);
+		expect(calls).toHaveLength(1);
+		expect(results[0]).toEqual(results[1]);
+	});
+
+	test("a rate-limited account waits for Retry-After and serves its last answer meanwhile", async () => {
+		await using dir = await credentialDirectory({ "claude-a.json": { type: "claude", access_token: "a" } });
+		let clock = 0;
+		let limited = false;
+		const logged: string[] = [];
+		const { fetch, calls } = countingFetch(() =>
+			limited
+				? new Response(null, { status: 429, headers: { "retry-after": "600" } })
+				: Response.json({ five_hour: { utilization: 10 } }),
+		);
+		const reader = createQuotaReader({
+			credentialDirectory: dir.path,
+			fetch,
+			now: () => clock,
+			cacheTtlMs: 60_000,
+			log: (message) => logged.push(message),
+		});
+
+		await reader.getQuota("claude");
+		limited = true;
+		clock = 60_000;
+		expect((await reader.getQuota("claude"))?.fetchedAtMs).toBe(0);
+		expect(logged).toEqual(["cliproxy-quota: claude account claude-a: HTTP 429; next request in 600s"]);
+		expect((await reader.getAccountQuotas())[0]).toMatchObject({ lastFetchFailed: true, quota: { fetchedAtMs: 0 } });
+
+		clock = 659_999;
+		await reader.getQuota("claude");
 		expect(calls).toHaveLength(2);
 
-		clock += 15_000;
-		await reader.getQuota("codex");
+		limited = false;
+		clock = 660_000;
+		expect((await reader.getQuota("claude"))?.fetchedAtMs).toBe(660_000);
 		expect(calls).toHaveLength(3);
+		expect((await reader.getAccountQuotas())[0]?.lastFetchFailed).toBe(false);
+	});
+
+	test("backs off exponentially without Retry-After and honours an HTTP-date Retry-After", async () => {
+		await using dir = await credentialDirectory({ "codex.json": codexAccounts["ready.json"] });
+		let clock = 0;
+		let respond = () => new Response(null, { status: 503 });
+		const logged: string[] = [];
+		const { fetch } = countingFetch(() => respond());
+		const reader = createQuotaReader({
+			credentialDirectory: dir.path,
+			fetch,
+			now: () => clock,
+			log: (message) => logged.push(message),
+		});
+
+		for (const at of [0, 30_000, 90_000]) {
+			clock = at;
+			await expect(reader.getQuota("codex")).rejects.toThrow(/failed for every account/);
+		}
+		respond = () =>
+			new Response(null, { status: 429, headers: { "retry-after": new Date(210_000 + 900_000).toUTCString() } });
+		clock = 210_000;
+		await expect(reader.getQuota("codex")).rejects.toThrow();
+
+		expect(logged.map((message) => message.replace(/^.*; /, ""))).toEqual([
+			"next request in 30s",
+			"next request in 60s",
+			"next request in 120s",
+			"next request in 900s",
+		]);
+	});
+
+	test("an account with no answer during its backoff fails without contacting the provider", async () => {
+		await using dir = await credentialDirectory({ "codex.json": codexAccounts["ready.json"] });
+		let clock = 0;
+		const { fetch, calls } = countingFetch(() => new Response(null, { status: 429 }));
+		const reader = createQuotaReader({ credentialDirectory: dir.path, fetch, now: () => clock, log: () => {} });
+
+		await expect(reader.getQuota("codex")).rejects.toThrow(/failed for every account/);
+		clock = 29_999;
+		await expect(reader.getQuota("codex")).rejects.toThrow(/failed for every account/);
+		expect(calls).toHaveLength(1);
+	});
+
+	test("stops serving an answer once it is older than the stale limit", async () => {
+		await using dir = await credentialDirectory({ "codex.json": codexAccounts["ready.json"] });
+		let clock = 0;
+		let fail = false;
+		const { fetch } = countingFetch(() =>
+			fail ? new Response(null, { status: 429, headers: { "retry-after": "3600" } }) : Response.json(codexPayload(5)),
+		);
+		const reader = createQuotaReader({
+			credentialDirectory: dir.path,
+			fetch,
+			now: () => clock,
+			maxStaleMs: 1_800_000,
+			log: () => {},
+		});
+
+		await reader.getQuota("codex");
+		fail = true;
+		clock = 1_799_999;
+		expect(await reader.getQuota("codex")).not.toBeNull();
+		clock = 1_800_000;
+		await expect(reader.getQuota("codex")).rejects.toThrow(/failed for every account/);
+	});
+
+	test("a refreshed access token is tried without waiting out the old token's backoff", async () => {
+		await using dir = await credentialDirectory({ "codex.json": { type: "codex", access_token: "expired" } });
+		const { fetch, calls } = countingFetch((_url, headers) =>
+			headers.get("authorization") === "Bearer expired"
+				? new Response(null, { status: 401 })
+				: Response.json(codexPayload(5)),
+		);
+		const reader = createQuotaReader({ credentialDirectory: dir.path, fetch, now: () => 0, log: () => {} });
+
+		await expect(reader.getQuota("codex")).rejects.toThrow();
+		await Bun.write(`${dir.path}/codex.json`, JSON.stringify({ type: "codex", access_token: "fresh" }));
+		expect(await reader.getQuota("codex")).not.toBeNull();
+		expect(calls.map((call) => call.headers.get("authorization"))).toEqual(["Bearer expired", "Bearer fresh"]);
 	});
 
 	test("returns null without enabled credentials and skips unusable files", async () => {
@@ -133,22 +274,26 @@ describe("credential reader", () => {
 		expect(performance.now() - started).toBeLessThan(2_000);
 	});
 
-	test("a caller abort cancels upstream requests", async () => {
+	test("a caller abort stops waiting but leaves the shared request to finish", async () => {
 		await using dir = await credentialDirectory({ "a.json": codexAccounts["ready.json"] });
 		let upstreamSignal: AbortSignal | undefined;
-		const fetch: Fetch = (_input, init) =>
-			new Promise((_resolve, reject) => {
-				upstreamSignal = init?.signal ?? undefined;
-				init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+		let answer: ((response: Response) => void) | undefined;
+		const fetch: Fetch = (_input, init) => {
+			upstreamSignal = init?.signal ?? undefined;
+			return new Promise((resolve) => {
+				answer = resolve;
 			});
+		};
+		const reader = createQuotaReader({ credentialDirectory: dir.path, fetch });
 		const controller = new AbortController();
-		const pending = createQuotaReader({ credentialDirectory: dir.path, fetch }).getQuota("codex", {
-			signal: controller.signal,
-		});
+		const pending = reader.getQuota("codex", { signal: controller.signal });
 		await Bun.sleep(10);
 		controller.abort();
 		await expect(pending).rejects.toThrow();
-		expect(upstreamSignal?.aborted).toBe(true);
+		expect(upstreamSignal?.aborted).toBe(false);
+
+		answer?.(Response.json(codexPayload(5)));
+		expect((await reader.getQuota("codex"))?.windows[0]?.usedPercent).toBe(5);
 	});
 
 	test("reports every account across providers, marking failures without throwing", async () => {
@@ -163,19 +308,30 @@ describe("credential reader", () => {
 				? Response.json(codexPayload(5))
 				: new Response(null, { status: 401 });
 		});
-		const results = await createQuotaReader({ credentialDirectory: dir.path, fetch }).getAccountQuotas();
+		const results = await createQuotaReader({
+			credentialDirectory: dir.path,
+			fetch,
+			now: () => 0,
+			log: () => {},
+		}).getAccountQuotas();
 
 		expect(results.sort((left, right) => left.account.localeCompare(right.account))).toEqual([
 			{
 				provider: "claude",
 				account: "claude-main",
-				quota: { ready: true, windows: [{ label: "7d", usedPercent: 12, resetAtMs: null }] },
+				lastFetchFailed: false,
+				quota: { fetchedAtMs: 0, ready: true, windows: [{ label: "7d", usedPercent: 12, resetAtMs: null }] },
 			},
-			{ provider: "codex", account: "exhausted", quota: null },
+			{ provider: "codex", account: "exhausted", lastFetchFailed: true, quota: null },
 			{
 				provider: "codex",
 				account: "ready",
-				quota: { ready: true, windows: [{ label: "7d", usedPercent: 5, resetAtMs: 1_788_454_137_000 }] },
+				lastFetchFailed: false,
+				quota: {
+					fetchedAtMs: 0,
+					ready: true,
+					windows: [{ label: "7d", usedPercent: 5, resetAtMs: 1_788_454_137_000 }],
+				},
 			},
 		]);
 	});
