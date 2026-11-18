@@ -16,6 +16,11 @@ use fleet::runner::{self, RunnerConfig, RETRY_BACKOFF, STARTUP_DEADLINE};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+// A stop that is ignored waits out UNINTERRUPTED_WAIT; PROMPT_STOP leaves
+// loaded Nix builders seconds of scheduling slack without hiding that.
+const UNINTERRUPTED_WAIT: Duration = Duration::from_secs(30);
+const PROMPT_STOP: Duration = Duration::from_secs(5);
+
 extern "C" {
     fn kill(pid: i32, sig: i32) -> i32;
 }
@@ -206,6 +211,18 @@ esac
         panic!("ssh child did not record a pid");
     }
 
+    // The runner reaps an exited child before backing off; until then the
+    // zombie still answers kill(pid, 0).
+    fn wait_pid_gone(&self, pid: u32) {
+        for _ in 0..500 {
+            if !pid_alive(pid) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!("ssh child {pid} was not reaped");
+    }
+
     fn wait_spawn_count(&self, expected: usize) {
         for _ in 0..500 {
             if self.spawn_count() >= expected {
@@ -346,17 +363,17 @@ fn transient_spawn_failure_reconnects() {
 fn stop_during_backoff_is_prompt_and_does_not_reconnect() {
     let harness = Harness::new();
     let mut cfg = harness.cfg("ok", "no");
-    cfg.retry_backoff = Duration::from_secs(2);
+    cfg.retry_backoff = UNINTERRUPTED_WAIT;
     let stop = Arc::new(AtomicI32::new(0));
     cfg.stop = Arc::clone(&stop);
     let handle = thread::spawn(move || runner::run(&cfg));
-    harness.wait_spawn_count(1);
-    thread::sleep(Duration::from_millis(50));
+    let pid = harness.wait_child_pid();
+    harness.wait_pid_gone(pid);
 
     let stopped = Instant::now();
     stop.store(2, Ordering::SeqCst);
     assert_eq!(handle.join().unwrap(), 130);
-    assert!(stopped.elapsed() < Duration::from_millis(500));
+    assert!(stopped.elapsed() < PROMPT_STOP);
     assert_eq!(harness.spawn_count(), 1);
 }
 
@@ -496,6 +513,7 @@ fn stop_during_startup_probe_preserves_signal_exit() {
     let stop = Arc::new(AtomicI32::new(0));
     cfg.stop = Arc::clone(&stop);
     cfg.startup_deadline = Duration::from_millis(30);
+    cfg.listener_probe = UNINTERRUPTED_WAIT;
     let handle = thread::spawn(move || runner::run(&cfg));
     let pid = harness.wait_child_pid();
     harness.wait_probe_ready();
@@ -504,7 +522,7 @@ fn stop_during_startup_probe_preserves_signal_exit() {
     stop.store(2, Ordering::SeqCst);
 
     assert_eq!(handle.join().unwrap(), 130);
-    assert!(stopped.elapsed() < Duration::from_millis(500));
+    assert!(stopped.elapsed() < PROMPT_STOP);
     assert!(!pid_alive(pid));
 }
 
