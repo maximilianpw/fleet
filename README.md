@@ -193,10 +193,12 @@ the CLI.
 
 ## Development
 
+Run these inside `nix develop`.
+
 ```sh
 cargo fmt --all --check
 cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
+RUSTFLAGS="-D warnings" FLEET_REQUIRE_FISH=1 FLEET_REQUIRE_GIT=1 cargo test --locked --all-targets
 nix build path:$PWD#fleet --no-link
 alejandra --check flake.nix nix
 ```
