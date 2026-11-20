@@ -19,7 +19,7 @@ Moved here from `pi-config` (`cli/cliproxyapi-quota-server.ts`,
 | --- | --- |
 | 200 | JSON below, `cache-control: no-store` |
 | 404 | Unknown path or provider, non-GET method, or no enabled credential |
-| 503 | Every account's upstream request failed or timed out (8 s) |
+| 503 | Every account's upstream request failed or timed out (8 s) and no answer from the last 2 minutes is held |
 
 ```json
 {
@@ -32,7 +32,9 @@ Moved here from `pi-config` (`cli/cliproxyapi-quota-server.ts`,
 ```
 
 `windows` describes the least-used ready account, or the least-used account
-if none is ready. Results are cached per provider for 15 seconds. Credential
+if none is ready. Results are cached per provider for 15 seconds. If a refresh then fails for every
+account, the last answer is served for up to 2 minutes; `fetchedAtMs` shows its
+age. Credential
 files are re-read on every uncached request. Tokens never leave the server.
 
 ## Metrics
@@ -71,7 +73,8 @@ CLIProxyAPI `auth_index`, read from `GET /v8/management/credentials`.
 
 Requests forward their `Authorization` header to that management endpoint,
 so the management key is checked by CLIProxyAPI itself and its 401, 403 or
-404 is returned unchanged. Route `/v8/management/observability/quota/` here
+404 is returned unchanged. Calls to the management API and Prometheus time out
+after 8 seconds and answer 502. Route `/v8/management/observability/quota/` here
 from the reverse proxy that fronts the management API.
 
 The `/quota/v1` and `/metrics` endpoints have no authentication. It only binds loopback addresses. Remote

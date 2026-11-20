@@ -21,6 +21,7 @@ export const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 export const XAI_USAGE_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 export const DEFAULT_CACHE_TTL_MS = 15_000;
 export const DEFAULT_REQUEST_TIMEOUT_MS = 8_000;
+export const DEFAULT_MAX_STALE_MS = 120_000;
 
 /** The subset of `fetch` this service uses; injectable for tests. */
 export type Fetch = (url: string, init: RequestInit) => Promise<Response>;
@@ -36,6 +37,7 @@ export interface QuotaReaderOptions {
 	credentialDirectory: string;
 	cacheTtlMs?: number;
 	requestTimeoutMs?: number;
+	maxStaleMs?: number;
 	fetch?: Fetch;
 	now?: () => number;
 }
@@ -152,6 +154,7 @@ function selectAccountQuota(quotas: readonly AccountQuota[]): AccountQuota {
 export function createQuotaReader(options: QuotaReaderOptions): QuotaReader {
 	const cacheTtlMs = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
 	const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+	const maxStaleMs = options.maxStaleMs ?? DEFAULT_MAX_STALE_MS;
 	const fetchImplementation = options.fetch ?? globalThis.fetch;
 	const now = options.now ?? Date.now;
 	const cache = new Map<QuotaProvider, ProviderQuota>();
@@ -180,6 +183,13 @@ export function createQuotaReader(options: QuotaReaderOptions): QuotaReader {
 				result.status === "fulfilled" ? [result.value] : [],
 			);
 			if (quotas.length === 0) {
+				if (
+					requestOptions.force !== true &&
+					cached !== undefined &&
+					now() - cached.fetchedAtMs <= maxStaleMs
+				) {
+					return cached;
+				}
 				throw new Error(`${provider} quota request failed for every account`);
 			}
 

@@ -1,4 +1,4 @@
-import type { Fetch } from "./credentials.ts";
+import { DEFAULT_REQUEST_TIMEOUT_MS, requestSignal, type Fetch } from "./credentials.ts";
 import { history, pools, selectWindows, windowPeriodHours, type Sample } from "./quotaStats.ts";
 
 export const QUOTA_HISTORY_PATH = /^\/observability\/quota\/(history|pools)$/;
@@ -9,6 +9,7 @@ const PROVIDER = /^[a-z0-9_-]+$/;
 export interface QuotaHistoryOptions {
 	prometheusUrl: string;
 	managementUrl: string;
+	requestTimeoutMs?: number;
 	fetch?: Fetch;
 	now?: () => number;
 }
@@ -63,13 +64,14 @@ async function authIndexByFile(
 	fetchImplementation: Fetch,
 	managementUrl: string,
 	request: Request,
+	signal: AbortSignal,
 ): Promise<Map<string, string>> {
 	const headers: Record<string, string> = {};
 	const authorization = request.headers.get("authorization");
 	if (authorization !== null) headers.authorization = authorization;
 	const response = await fetchImplementation(`${managementUrl}/v8/management/credentials`, {
 		headers,
-		signal: request.signal,
+		signal,
 	});
 	if (response.status === 401 || response.status === 403 || response.status === 404) {
 		throw new HttpError(response.status, "management authentication failed");
@@ -155,10 +157,11 @@ export function createQuotaHistoryHandler(
 	return async (request, kind) => {
 		try {
 			const query = parseQuery(new URL(request.url), now());
-			const authIndexes = await authIndexByFile(fetchImplementation, options.managementUrl, request);
+			const signal = requestSignal(request.signal, options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+			const authIndexes = await authIndexByFile(fetchImplementation, options.managementUrl, request, signal);
 			const [used, resets] = await Promise.all(
 				["cliproxy_quota_used_percent", "cliproxy_quota_reset_timestamp_seconds"].map((metric) =>
-					querySeries(fetchImplementation, options.prometheusUrl, metric, query, request.signal),
+					querySeries(fetchImplementation, options.prometheusUrl, metric, query, signal),
 				),
 			);
 			const samples = samplesFromSeries(used ?? [], resets ?? [], authIndexes).filter(

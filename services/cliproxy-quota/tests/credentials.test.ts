@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
 import {
 	CLAUDE_USAGE_URL,
 	CODEX_USAGE_URL,
@@ -201,5 +203,68 @@ describe("credential reader", () => {
 		]);
 		expect(calls[0]?.headers.get("anthropic-beta")).toBe("oauth-2025-04-20");
 		expect(calls[1]?.headers.get("x-xai-token-auth")).toBe("xai-grok-cli");
+	});
+
+	describe("when a refresh fails after a success", () => {
+		const oneCodex = { "a.json": codexAccounts["ready.json"] };
+
+		async function readerAfterSuccess(dirPath: string) {
+			let clock = 1_000;
+			let failing = false;
+			const { fetch } = countingFetch(() =>
+				failing ? new Response("down", { status: 500 }) : Response.json(codexPayload(5)),
+			);
+			const reader = createQuotaReader({ credentialDirectory: dirPath, fetch, now: () => clock });
+			const first = await reader.getQuota("codex");
+			return {
+				reader,
+				first,
+				advance: (ms: number) => {
+					clock += ms;
+				},
+				fail: () => {
+					failing = true;
+				},
+			};
+		}
+
+		test("serves the last good answer when a refresh fails for every account", async () => {
+			await using dir = await credentialDirectory(oneCodex);
+			const { reader, first, advance, fail } = await readerAfterSuccess(dir.path);
+			advance(20_000);
+			fail();
+
+			const served = await reader.getQuota("codex");
+			expect(served).toEqual(first);
+			expect(served?.fetchedAtMs).toBe(1_000);
+		});
+
+		test("stops serving the last good answer once it is too old", async () => {
+			await using dir = await credentialDirectory(oneCodex);
+			const { reader, advance, fail } = await readerAfterSuccess(dir.path);
+			advance(200_000);
+			fail();
+
+			await expect(reader.getQuota("codex")).rejects.toThrow(/failed for every account/);
+		});
+
+		test("force never returns a stale answer", async () => {
+			await using dir = await credentialDirectory(oneCodex);
+			const { reader, advance, fail } = await readerAfterSuccess(dir.path);
+			advance(20_000);
+			fail();
+
+			await expect(reader.getQuota("codex", { force: true })).rejects.toThrow(/failed for every account/);
+		});
+
+		test("a provider whose credentials were removed is not served from memory", async () => {
+			await using dir = await credentialDirectory(oneCodex);
+			const { reader, advance, fail } = await readerAfterSuccess(dir.path);
+			advance(20_000);
+			fail();
+			await rm(join(dir.path, "a.json"));
+
+			expect(await reader.getQuota("codex")).toBeNull();
+		});
 	});
 });

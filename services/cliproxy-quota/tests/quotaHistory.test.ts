@@ -124,4 +124,30 @@ describe("quota history handler", () => {
 		expect(response.status).toBe(502);
 		expect(await response.json()).toEqual({ error: "quota history storage unavailable" });
 	});
+
+	for (const hanging of ["Prometheus", "the management API"] as const) {
+		test(`answers 502 when ${hanging} hangs`, async () => {
+			const healthy = stubFetch().fetch;
+			const fetch: Fetch = (input, init) => {
+				const isManagement = new URL(String(input)).origin === MANAGEMENT;
+				if (isManagement !== (hanging === "the management API")) return healthy(input, init);
+				return new Promise((_resolve, reject) => {
+					init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+				});
+			};
+			const handle = createQuotaHistoryHandler({
+				prometheusUrl: PROMETHEUS,
+				managementUrl: MANAGEMENT,
+				fetch,
+				now: () => now,
+				requestTimeoutMs: 50,
+			});
+
+			const started = performance.now();
+			const response = await handle(request("/observability/quota/history"), "history");
+			expect(response.status).toBe(502);
+			expect(await response.json()).toEqual({ error: "quota history storage unavailable" });
+			expect(performance.now() - started).toBeLessThan(2_000);
+		});
+	}
 });
