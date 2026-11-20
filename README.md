@@ -26,8 +26,8 @@ $ fleet status
 Current machine: laptop
 
 HOST               NETWORK    PATH                  FLEET     SESSIONS                     AGENTS
-laptop             self       -                     0.1.0     main*                        -
-workbox            online     direct                0.1.0     main,agents                  ▲ needs you 1, ✓ done 1
+laptop             self       -                     0.2.0     main*                        -
+workbox            online     direct                0.2.0     main,agents                  ▲ needs you 1, ✓ done 1
 homeserver         offline    seen 2026-10-01 08:30 -         offline                      ?
 
 HOST               SESSION        STATE         AGENT    AGE   DETAIL
@@ -67,7 +67,7 @@ tmux; the Nix package brings both.
 **Nix**, to try it:
 
 ```sh
-nix run github:maximilianpw/fleet/v0.1.0 -- --help
+nix run github:maximilianpw/fleet/v0.2.0 -- --help
 ```
 
 **Nix flake input**, with the Home Manager module that writes the config for
@@ -75,7 +75,7 @@ you:
 
 ```nix
 {
-  inputs.fleet.url = "github:maximilianpw/fleet/v0.1.0";
+  inputs.fleet.url = "github:maximilianpw/fleet/v0.2.0";
 
   # in a Home Manager configuration:
   imports = [inputs.fleet.homeManagerModules.default];
@@ -90,7 +90,7 @@ you:
 **Cargo** (Rust 1.95 or newer):
 
 ```sh
-cargo install --locked --git https://github.com/maximilianpw/fleet --tag v0.1.0 fleet
+cargo install --locked --git https://github.com/maximilianpw/fleet --tag v0.2.0 fleet
 ```
 
 Shell completions: `fleet completions bash|zsh|fish`. The Nix package
