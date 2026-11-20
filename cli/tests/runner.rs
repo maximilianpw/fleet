@@ -587,7 +587,6 @@ fn binary_int_during_startup_cleans_up_child() {
     );
     let mut child = Command::new(env!("CARGO_BIN_EXE_fleet-tunnel-runner"))
         .env("PATH", &path)
-        .env("FLEET_TUNNEL_STARTUP_SECONDS", "1")
         .arg("3000")
         .args(production_ssh_args())
         .stdin(Stdio::null())
@@ -596,10 +595,9 @@ fn binary_int_during_startup_cleans_up_child() {
         .spawn()
         .unwrap();
     let ssh_pid = harness.wait_child_pid();
-    thread::sleep(Duration::from_millis(200));
     assert!(
         pid_alive(child.id()),
-        "runner honored FLEET_TUNNEL_STARTUP_SECONDS and exited early"
+        "runner exited before the signal was sent"
     );
     unsafe {
         let _ = kill(child.id() as i32, 2);
@@ -633,6 +631,47 @@ fn binary_term_during_startup_cleans_up_child() {
         .spawn()
         .unwrap();
     let ssh_pid = harness.wait_child_pid();
+    unsafe {
+        let _ = kill(child.id() as i32, 15);
+    }
+    let status = child.wait().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        let code = status.code().or_else(|| status.signal().map(|s| 128 + s));
+        assert_eq!(code, Some(143));
+    }
+    assert!(!pid_alive(ssh_pid));
+}
+
+#[test]
+fn the_binary_ignores_a_startup_deadline_from_the_environment() {
+    let harness = Harness::new();
+    fs::write(&harness.status_file, "hang\n").unwrap();
+    fs::write(&harness.listen_file, "no\n").unwrap();
+    let path = format!(
+        "{}:{}",
+        harness.dir.0.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fleet-tunnel-runner"))
+        .env("PATH", &path)
+        .env("FLEET_TUNNEL_STARTUP_SECONDS", "1")
+        .arg("3000")
+        .args(production_ssh_args())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let ssh_pid = harness.wait_child_pid();
+    assert_eq!(harness.spawn_count(), 1);
+    thread::sleep(Duration::from_millis(1500));
+    assert!(
+        pid_alive(ssh_pid),
+        "runner tore down ssh after the environment's startup deadline"
+    );
+    assert_eq!(harness.spawn_count(), 1);
     unsafe {
         let _ = kill(child.id() as i32, 15);
     }
