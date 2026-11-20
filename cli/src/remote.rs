@@ -176,6 +176,10 @@ impl Runner {
         let deadline = Instant::now() + timeout;
         let mut producer_status = None;
         let mut consumer_status = None;
+        // A side this function killed did not fail by itself, so its exit
+        // status says nothing about why the transfer failed.
+        let mut producer_killed = false;
+        let mut consumer_killed = false;
         let mut timed_out = false;
         while producer_status.is_none() || consumer_status.is_none() {
             if producer_status.is_none() {
@@ -187,11 +191,11 @@ impl Runner {
             let failed = |status: Option<std::process::ExitStatus>| {
                 status.is_some_and(|status| !status.success())
             };
-            if failed(producer_status) && consumer_status.is_none() {
-                let _ = consumer.kill();
+            if failed(producer_status) && consumer_status.is_none() && !consumer_killed {
+                consumer_killed = consumer.kill().is_ok();
             }
-            if failed(consumer_status) && producer_status.is_none() {
-                let _ = producer.kill();
+            if failed(consumer_status) && producer_status.is_none() && !producer_killed {
+                producer_killed = producer.kill().is_ok();
             }
             if Instant::now() >= deadline {
                 timed_out = true;
@@ -208,19 +212,28 @@ impl Runner {
         if timed_out {
             return Err(RemoteError::Transfer("timed out".into()));
         }
-        if !consumer_status.is_some_and(|status| status.success()) {
-            return Err(RemoteError::Transfer(format!(
-                "writing the destination failed: {}",
-                consumer_err.trim()
-            )));
+        let succeeded = |status: Option<std::process::ExitStatus>| {
+            status.is_some_and(|status| status.success())
+        };
+        let failure = |what: &str, stderr: &str| match stderr.trim() {
+            "" => what.to_string(),
+            detail => format!("{what}: {detail}"),
+        };
+        let mut failures = Vec::new();
+        if !succeeded(producer_status) && !producer_killed {
+            failures.push(failure("reading the source failed", &producer_err));
         }
-        if !producer_status.is_some_and(|status| status.success()) {
-            return Err(RemoteError::Transfer(format!(
-                "reading the source failed: {}",
-                producer_err.trim()
-            )));
+        if !succeeded(consumer_status) && !consumer_killed {
+            failures.push(failure("writing the destination failed", &consumer_err));
         }
-        Ok(())
+        if failures.is_empty() && !(succeeded(producer_status) && succeeded(consumer_status)) {
+            failures.push("both sides were stopped".to_string());
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(RemoteError::Transfer(failures.join("; ")))
+        }
     }
 
     fn command(&self, endpoint: &Endpoint, script: &str, keep_stdin: bool) -> Command {
@@ -347,9 +360,10 @@ pub fn fan_out<I: Sync, T: Send>(items: &[I], task: impl Fn(&I) -> T + Sync) -> 
 /// `$XDG_RUNTIME_DIR/fleet/ssh`, else `$HOME/.cache/fleet/ssh`, mode 0700.
 /// Without a usable directory, queries fall back to unshared connections.
 fn prepare_control_dir(env: &ProcessEnv) -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_RUNTIME_DIR")
-        .filter(|value| !value.is_empty())
-        .map(|dir| PathBuf::from(dir).join("fleet"))
+    let base = env
+        .xdg_runtime_dir
+        .as_ref()
+        .map(|dir| dir.join("fleet"))
         .or_else(|| env.home.as_ref().map(|home| home.join(".cache/fleet")))?;
     let dir = base.join("ssh");
     fs::create_dir_all(&dir).ok()?;
@@ -407,6 +421,27 @@ mod tests {
         let output = runner.run(&Endpoint::Local, "sleep 30 & sleep 30");
         assert!(output.timed_out);
         assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn pipe_blames_the_side_that_failed_not_the_one_it_stopped() {
+        let runner = Runner {
+            control_dir: None,
+            timeout: QUERY_TIMEOUT,
+        };
+        let error = runner
+            .pipe(
+                &Endpoint::Local,
+                "echo no such transcript >&2; exit 1",
+                &Endpoint::Local,
+                "sleep 1; cat >/dev/null",
+                Duration::from_secs(20),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("reading the source failed"), "{error}");
+        assert!(error.contains("no such transcript"), "{error}");
+        assert!(!error.contains("writing the destination"), "{error}");
     }
 
     #[test]

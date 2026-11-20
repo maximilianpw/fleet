@@ -22,6 +22,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::config::is_safe_session_name;
 use crate::process::run_with_deadline;
 
 const RECORD_VERSION: u32 = 1;
@@ -29,6 +30,9 @@ const TEXT_LIMIT: usize = 240;
 const TMUX_TIMEOUT: Duration = Duration::from_secs(3);
 /// Records whose pane disappeared are deleted after this long.
 const GONE_RETENTION_SECS: u64 = 24 * 60 * 60;
+/// Records without a pane have no liveness signal, so silence is the only
+/// evidence that the agent is gone.
+const SILENT_RETENTION_SECS: u64 = 7 * 24 * 60 * 60;
 
 pub const HOOK_USAGE: &str = "\
 usage:
@@ -104,6 +108,10 @@ pub struct AgentRecord {
     pub tmux_session: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tmux_pane: Option<String>,
+    /// PID of the tmux server that owns `tmux_pane`. A restarted server
+    /// reuses pane ids, so the id alone does not identify a pane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tmux_server: Option<u32>,
     pub updated_at: u64,
 }
 
@@ -308,13 +316,18 @@ pub fn run_hook(parsed: ParsedHook, env: &AgentEnv) -> Result<(), AgentError> {
             if let Some(payload) = &payload {
                 merge_hook_payload(&mut fields, Some(state), payload);
             }
-            let tmux_session = env.tmux_pane.as_deref().and_then(tmux_session_of_pane);
+            let (tmux_server, tmux_session) = env
+                .tmux_pane
+                .as_deref()
+                .and_then(tmux_pane_identity)
+                .unzip();
             set_record(
                 &dir,
                 state,
                 fields,
                 env.tmux_pane.as_deref(),
                 tmux_session,
+                tmux_server,
                 now_secs(),
             )?;
             Ok(())
@@ -337,14 +350,13 @@ pub fn set_record(
     fields: HookFields,
     tmux_pane: Option<&str>,
     tmux_session: Option<String>,
+    tmux_server: Option<u32>,
     now: u64,
 ) -> Result<AgentRecord, AgentError> {
     let key = record_key(tmux_pane, fields.session_id.as_deref())?;
     let previous = read_record(&dir.join(format!("{key}.json"))).filter(|old| {
-        match (&old.session_id, &fields.session_id) {
-            (Some(old_id), Some(new_id)) => old_id == new_id,
-            _ => true,
-        }
+        !both_known_and_differ(old.session_id.as_ref(), fields.session_id.as_ref())
+            && !both_known_and_differ(old.tmux_server, tmux_server)
     });
     let keep = |new: Option<String>, old: Option<&String>| new.or_else(|| old.cloned());
     let old = previous.as_ref();
@@ -384,6 +396,7 @@ pub fn set_record(
         }),
         tmux_session: tmux_session.or_else(|| old.and_then(|r| r.tmux_session.clone())),
         tmux_pane: tmux_pane.map(str::to_string),
+        tmux_server: tmux_server.or_else(|| old.and_then(|r| r.tmux_server)),
         updated_at: now,
     };
     write_record(dir, &record)?;
@@ -409,6 +422,10 @@ pub fn clear_records(
     Ok(())
 }
 
+fn both_known_and_differ<T: PartialEq>(old: Option<T>, new: Option<T>) -> bool {
+    matches!((old, new), (Some(old), Some(new)) if old != new)
+}
+
 fn record_key(tmux_pane: Option<&str>, session_id: Option<&str>) -> Result<String, AgentError> {
     let safe = |raw: &str| -> String {
         raw.chars()
@@ -430,9 +447,14 @@ fn record_key(tmux_pane: Option<&str>, session_id: Option<&str>) -> Result<Strin
     Err(AgentError::NoIdentity)
 }
 
-/// Collapse whitespace and cap length so one huge prompt cannot bloat state.
+/// Collapse whitespace and control characters and cap length, so one huge
+/// prompt cannot bloat state and no escape sequence is stored.
 fn clip(text: &str) -> String {
-    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let collapsed = text
+        .split(|c: char| c.is_whitespace() || c.is_control())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
     if collapsed.chars().count() <= TEXT_LIMIT {
         return collapsed;
     }
@@ -460,7 +482,23 @@ fn write_record(dir: &Path, record: &AgentRecord) -> Result<(), AgentError> {
 
 fn read_record(path: &Path) -> Option<AgentRecord> {
     let text = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&text).ok()
+    record_from_value(serde_json::from_str(&text).ok()?)
+}
+
+/// `None` for a record this build cannot read: a newer record version or a
+/// state it does not know.
+fn record_from_value(value: serde_json::Value) -> Option<AgentRecord> {
+    serde_json::from_value::<AgentRecord>(value)
+        .ok()
+        .filter(|record| record.version <= RECORD_VERSION)
+}
+
+/// Parse `fleet agents --local --json` from another host, which may run a
+/// newer Fleet. Records this build cannot read are skipped, so one of them
+/// does not hide the rest. `None` when the output is not a JSON array.
+pub fn parse_agent_records(json: &str) -> Option<Vec<AgentRecord>> {
+    let values: Vec<serde_json::Value> = serde_json::from_str(json).ok()?;
+    Some(values.into_iter().filter_map(record_from_value).collect())
 }
 
 fn read_dir_records(dir: &Path) -> Result<Vec<(PathBuf, AgentRecord)>, AgentError> {
@@ -505,7 +543,8 @@ fn remove(path: &Path) -> Result<(), AgentError> {
 /// Live tmux panes on this machine's default tmux server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaneSnapshot {
-    Live(BTreeSet<String>),
+    /// `(server PID, pane id)` pairs.
+    Live(BTreeSet<(u32, String)>),
     /// tmux is installed but no server is running: every pane is gone.
     NoServer,
     /// tmux could not be asked; keep reported states.
@@ -514,7 +553,7 @@ pub enum PaneSnapshot {
 
 pub fn tmux_panes() -> PaneSnapshot {
     let mut cmd = Command::new("tmux");
-    cmd.args(["list-panes", "-a", "-F", "#{pane_id}"]);
+    cmd.args(["list-panes", "-a", "-F", "#{pid} #{pane_id}"]);
     match run_with_deadline(
         &mut cmd,
         TMUX_TIMEOUT,
@@ -524,9 +563,10 @@ pub fn tmux_panes() -> PaneSnapshot {
         Ok(output) if output.code == 0 => PaneSnapshot::Live(
             String::from_utf8_lossy(&output.stdout)
                 .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .map(str::to_string)
+                .filter_map(|line| {
+                    let (server, pane) = line.trim().split_once(' ')?;
+                    Some((server.parse().ok()?, pane.to_string()))
+                })
                 .collect(),
         ),
         Ok(output) if !output.timed_out => {
@@ -541,9 +581,16 @@ pub fn tmux_panes() -> PaneSnapshot {
     }
 }
 
-fn tmux_session_of_pane(pane: &str) -> Option<String> {
+/// Server PID and session name of `pane`.
+fn tmux_pane_identity(pane: &str) -> Option<(u32, String)> {
     let mut cmd = Command::new("tmux");
-    cmd.args(["display-message", "-p", "-t", pane, "#{session_name}"]);
+    cmd.args([
+        "display-message",
+        "-p",
+        "-t",
+        pane,
+        "#{pid} #{session_name}",
+    ]);
     let output = run_with_deadline(
         &mut cmd,
         TMUX_TIMEOUT,
@@ -551,12 +598,17 @@ fn tmux_session_of_pane(pane: &str) -> Option<String> {
         Duration::from_millis(10),
     )
     .ok()?;
-    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (output.code == 0 && !name.is_empty()).then_some(name)
+    if output.code != 0 {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let (server, session) = text.trim().split_once(' ')?;
+    (!session.is_empty()).then_some((server.parse().ok()?, session.to_string()))
 }
 
 /// This machine's agent records with liveness applied. Records whose pane is
-/// gone are reported as [`AgentState::Gone`] and deleted once stale.
+/// gone are reported as [`AgentState::Gone`] and deleted once stale. Records
+/// without a pane are deleted after a week without a report.
 pub fn local_agents(
     dir: &Path,
     panes: &PaneSnapshot,
@@ -564,19 +616,28 @@ pub fn local_agents(
 ) -> Result<Vec<AgentRecord>, AgentError> {
     let mut out = Vec::new();
     for (path, mut record) in read_dir_records(dir)? {
+        let silent_for = now.saturating_sub(record.updated_at);
         if let Some(pane) = &record.tmux_pane {
             let alive = match panes {
-                PaneSnapshot::Live(live) => live.contains(pane),
+                PaneSnapshot::Live(live) => live.iter().any(|(server, id)| {
+                    id == pane
+                        && record
+                            .tmux_server
+                            .is_none_or(|recorded| recorded == *server)
+                }),
                 PaneSnapshot::NoServer => false,
                 PaneSnapshot::Unknown => true,
             };
             if !alive {
-                if now.saturating_sub(record.updated_at) > GONE_RETENTION_SECS {
+                if silent_for > GONE_RETENTION_SECS {
                     remove(&path)?;
                     continue;
                 }
                 record.state = AgentState::Gone;
             }
+        } else if silent_for > SILENT_RETENTION_SECS {
+            remove(&path)?;
+            continue;
         }
         out.push(record);
     }
@@ -602,12 +663,17 @@ pub fn age_label(now: u64, then: u64) -> String {
 }
 
 /// Resume command for a moved session: the recorded one, or the known form
-/// for Claude Code and Codex.
+/// for Claude Code and Codex. The session id comes from a hook payload and
+/// ends up in a shell command on another host, so the known forms take only
+/// ids made of `A-Z a-z 0-9 _ . -`.
 pub fn resume_command(record: &AgentRecord) -> Option<String> {
     if let Some(command) = &record.resume_command {
         return Some(command.clone());
     }
-    let id = record.session_id.as_deref()?;
+    let id = record
+        .session_id
+        .as_deref()
+        .filter(|id| is_safe_session_name(id))?;
     match record.agent.as_str() {
         "claude" | "claude-code" => Some(format!("claude --resume {id}")),
         "codex" => Some(format!("codex resume {id}")),
@@ -703,6 +769,7 @@ mod tests {
             fields(Some("fix   the\nbuild"), None),
             Some("%3"),
             Some("main".into()),
+            Some(7),
             100,
         )
         .unwrap();
@@ -712,6 +779,7 @@ mod tests {
             fields(None, Some("permission: Bash")),
             Some("%3"),
             None,
+            Some(7),
             110,
         )
         .unwrap();
@@ -725,6 +793,7 @@ mod tests {
             fields(None, None),
             Some("%3"),
             None,
+            Some(7),
             120,
         )
         .unwrap();
@@ -732,7 +801,16 @@ mod tests {
 
         let mut other = fields(Some("new task"), None);
         other.session_id = Some("s2".into());
-        let fresh = set_record(&dir, AgentState::Running, other, Some("%3"), None, 130).unwrap();
+        let fresh = set_record(
+            &dir,
+            AgentState::Running,
+            other,
+            Some("%3"),
+            None,
+            Some(7),
+            130,
+        )
+        .unwrap();
         assert_eq!(fresh.task.as_deref(), Some("new task"));
         assert_eq!(
             fresh.tmux_session, None,
@@ -754,6 +832,7 @@ mod tests {
             base.clone(),
             Some("%1"),
             None,
+            Some(7),
             1_000,
         )
         .unwrap();
@@ -763,14 +842,15 @@ mod tests {
             base.clone(),
             Some("%2"),
             None,
+            Some(7),
             1_000,
         )
         .unwrap();
         let mut detached = base;
         detached.session_id = Some("outside-tmux".into());
-        set_record(&dir, AgentState::Idle, detached, None, None, 1_000).unwrap();
+        set_record(&dir, AgentState::Idle, detached, None, None, None, 1_000).unwrap();
 
-        let live = PaneSnapshot::Live(["%1".to_string()].into_iter().collect());
+        let live = PaneSnapshot::Live([(7, "%1".to_string())].into_iter().collect());
         let records = local_agents(&dir, &live, 2_000).unwrap();
         let states: Vec<_> = records.iter().map(|r| (r.key.as_str(), r.state)).collect();
         assert!(states.contains(&("pane-1", AgentState::Running)));
@@ -790,10 +870,94 @@ mod tests {
     }
 
     #[test]
+    fn a_reused_pane_id_on_a_new_tmux_server_is_not_the_recorded_pane() {
+        let dir = temp_dir("reuse");
+        let fields = HookFields {
+            session_id: Some("s1".into()),
+            task: Some("old task".into()),
+            ..HookFields::default()
+        };
+        set_record(
+            &dir,
+            AgentState::Running,
+            fields,
+            Some("%1"),
+            Some("main".into()),
+            Some(7),
+            1_000,
+        )
+        .unwrap();
+        let restarted = PaneSnapshot::Live([(8, "%1".to_string())].into_iter().collect());
+        let records = local_agents(&dir, &restarted, 2_000).unwrap();
+        assert_eq!(records[0].state, AgentState::Gone);
+
+        let fresh = set_record(
+            &dir,
+            AgentState::Idle,
+            HookFields::default(),
+            Some("%1"),
+            Some("other".into()),
+            Some(8),
+            3_000,
+        )
+        .unwrap();
+        assert_eq!(fresh.task, None, "the old server's record is not inherited");
+        assert_eq!(fresh.session_id, None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn records_without_a_pane_expire_after_a_week_of_silence() {
+        let dir = temp_dir("silent");
+        let fields = HookFields {
+            session_id: Some("outside-tmux".into()),
+            ..HookFields::default()
+        };
+        set_record(&dir, AgentState::Running, fields, None, None, None, 1_000).unwrap();
+        let panes = PaneSnapshot::Unknown;
+        assert_eq!(
+            local_agents(&dir, &panes, 1_000 + SILENT_RETENTION_SECS)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(local_agents(&dir, &panes, 1_001 + SILENT_RETENTION_SECS)
+            .unwrap()
+            .is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn text_fields_drop_control_characters() {
+        assert_eq!(clip("evil\u{1b}[31mred\u{7}  x\ny"), "evil [31mred x y");
+    }
+
+    #[test]
+    fn unreadable_records_from_a_newer_fleet_are_skipped() {
+        let json = r#"[
+            {"version":1,"key":"pane-1","agent":"claude","state":"done","updated_at":1},
+            {"version":1,"key":"pane-2","agent":"claude","state":"hibernating","updated_at":1},
+            {"version":2,"key":"pane-3","agent":"claude","state":"done","updated_at":1}
+        ]"#;
+        let records = parse_agent_records(json).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].key, "pane-1");
+        assert_eq!(parse_agent_records("{}"), None);
+    }
+
+    #[test]
     fn identity_is_required() {
         let dir = temp_dir("identity");
         assert!(matches!(
-            set_record(&dir, AgentState::Done, HookFields::default(), None, None, 1),
+            set_record(
+                &dir,
+                AgentState::Done,
+                HookFields::default(),
+                None,
+                None,
+                None,
+                1
+            ),
             Err(AgentError::NoIdentity)
         ));
         assert!(matches!(
@@ -818,12 +982,16 @@ mod tests {
             cwd: None,
             tmux_session: None,
             tmux_pane: None,
+            tmux_server: None,
             updated_at: 0,
         };
         assert_eq!(
             resume_command(&record).as_deref(),
             Some("claude --resume abc")
         );
+        record.session_id = Some("abc; touch /tmp/x".into());
+        assert_eq!(resume_command(&record), None);
+        record.session_id = Some("abc".into());
         record.agent = "codex".into();
         assert_eq!(resume_command(&record).as_deref(), Some("codex resume abc"));
         record.agent = "pi".into();

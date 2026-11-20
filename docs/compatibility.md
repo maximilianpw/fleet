@@ -83,10 +83,10 @@ queries to a host share one connection. They are the only multiplexed SSH.
 doctor's reachability and TCP probes keep their exact historical argv.
 
 Tailscale presence comes from the local `tailscale status --json`, falling
-back to the macOS app bundle CLI. If Tailscale is missing, presence is
-`unknown`; only `--where online` then fails. `status` and `agents` do not
-contact hosts that Tailscale reports offline. Hosts it does not list are still
-contacted. `doctor`, `ports`, and `move` always try SSH.
+back to the macOS app bundle CLI. If Tailscale is missing, stopped, or logged
+out, presence is `unknown`; only `--where online` then fails. `status` and
+`agents` do not contact hosts that Tailscale reports offline. Hosts it does
+not list are still contacted. `doctor`, `ports`, and `move` always try SSH.
 
 ## Permitted differences
 
@@ -144,7 +144,9 @@ on the remote host.
 Nix-wrapped binaries get OpenSSH, tmux, lsof, and Linux process tools on PATH.
 A Cargo-installed binary reports missing SSH, tmux, process-list, and signal
 tools when an operation needs them. A failed lsof ownership probe stays
-`unknown`, so Fleet refuses unsafe tunnel mutations rather than guessing.
+`unknown`, so Fleet refuses unsafe tunnel mutations rather than guessing. The
+runner likewise keeps its SSH child when `lsof` cannot be started; a check
+that ran and found no listener, or hung, still reconnects.
 `launchctl` stays an OS command. Remote doctor probes still require Bash and
 GNU `timeout` on the remote host.
 

@@ -408,6 +408,24 @@ fn stop_after_healthy_listener_reaps_owned_child() {
 }
 
 #[test]
+fn a_listener_check_that_cannot_start_does_not_tear_down_ssh() {
+    let harness = Harness::new();
+    let mut cfg = harness.cfg("hang", "yes");
+    cfg.lsof_program = harness.dir.0.join("no-such-lsof").into();
+    cfg.startup_deadline = Duration::from_millis(80);
+    let stop = Arc::new(AtomicI32::new(0));
+    cfg.stop = Arc::clone(&stop);
+    let handle = thread::spawn(move || runner::run(&cfg));
+    let pid = harness.wait_child_pid();
+    thread::sleep(Duration::from_millis(250));
+    assert_eq!(harness.spawn_count(), 1);
+    assert!(pid_alive(pid));
+    stop.store(15, Ordering::SeqCst);
+    assert_eq!(handle.join().unwrap(), 143);
+    assert!(!pid_alive(pid));
+}
+
+#[test]
 fn healthy_listener_is_not_a_lifetime_cap() {
     let harness = Harness::new();
     let mut cfg = harness.cfg("hang", "yes");

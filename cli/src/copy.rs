@@ -107,8 +107,13 @@ fn parse_copy_endpoint(
             return Err(CopyError::RemoteSourcePathRequired);
         }
         if resolved.is_local {
-            let local_path = if path.is_empty() { "." } else { path };
-            return Ok(CopyEndpoint::Local(local_path.to_string()));
+            let local_path = match path {
+                "" => ".".to_string(),
+                // scp would read `a:b` as host `a`.
+                path if remote_spec(path).is_some() => format!("./{path}"),
+                path => path.to_string(),
+            };
+            return Ok(CopyEndpoint::Local(local_path));
         }
         return Ok(CopyEndpoint::Remote {
             ssh_target: resolved.ssh_target,

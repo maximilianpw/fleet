@@ -461,7 +461,7 @@ pub fn run_local_agents(json: bool) -> Result<(), FleetError> {
 }
 
 /// Public CLI hook for `fleet pick`: print the first matching host, or every
-/// match with `all`, in configuration order.
+/// match with `all`, sorted by canonical name like `fleet list`.
 pub fn run_pick_command(
     config: &FleetConfig,
     filter: Option<&select::HostFilter>,

@@ -24,11 +24,15 @@ Claude Code and Codex both send these fields. Unknown or malformed payloads
 are ignored.
 
 Inside tmux, a record is keyed by `$TMUX_PANE`, and Fleet asks tmux for the
-session name. Outside tmux, the session id is the key. Records live in
+session name and the server's PID. tmux reuses pane ids after a server
+restart, so a record belongs to a pane only while both match. Outside tmux,
+the session id is the key. Text fields are stored on one line without control
+characters. Records live in
 `$XDG_STATE_HOME/fleet/agents/` (default `~/.local/state/fleet/agents/`).
 
-`fleet hook` exits 0 on success and 1 on any error. It never exits 2, which
-Claude Code treats as "block" for some hooks. Older Fleet builds do not have
+`fleet hook` exits 0 on success and 1 on any error, including arguments the
+command-line parser rejects. It never exits 2, which Claude Code treats as
+"block" for some hooks. Older Fleet builds do not have
 `hook`, and clap exits 2 for an unknown subcommand. So always guard hook
 commands with `|| true` until every host runs a Fleet with `hook`.
 
@@ -73,7 +77,10 @@ fleet agents --local --json  # this machine only; no config needed
 
 States are `● running`, `▲ needs you`, `✓ done`, `· idle`, and `◦ gone`.
 `gone` means the record's tmux pane no longer exists. Gone records are
-deleted 24 hours after their last update. Remote hosts need `fleet` on the
+deleted 24 hours after their last update. A record from outside tmux has no
+pane to check, so it is deleted after seven days without a report. Records
+written by a newer Fleet that this build cannot read are left out of the
+listing. Remote hosts need `fleet` on the
 PATH of a non-interactive SSH session. `fleet doctor` warns when it is
 missing or differs from the local version.
 
@@ -87,23 +94,31 @@ Fleet refuses, and changes nothing, unless:
 
 - exactly one agent has reported from tmux session SESSION on HOST;
 - that agent is done or idle (`--force` overrides only this check);
-- its checkout is a clean git branch whose HEAD equals its upstream;
+- its checkout is a clean git branch whose HEAD equals its upstream, and the
+  upstream is on a remote;
 - the checkout is under HOST's home directory.
 
 Then it:
 
 1. prepares the same home-relative path on TARGET. It clones from the
    upstream remote's URL if missing; otherwise it requires a clean checkout,
-   fetches, checks out the branch, and fast-forwards only. Checking out the
-   branch switches that checkout for anything else working in it on TARGET;
-2. copies the transcript from HOST to TARGET through this machine;
+   fetches, checks out the branch, and fast-forwards only to the upstream
+   branch, which may be named differently from the local one. The branch must
+   then contain the commit HOST is on. Checking out the branch switches that
+   checkout for anything else working in it on TARGET;
+2. copies the transcript from HOST to TARGET through this machine. It is
+   written beside its final path and moved into place only after both the
+   read and the write succeeded, so a failed copy never replaces a transcript;
 3. starts the resume command in a detached tmux session SESSION on TARGET
    (`claude --resume ID`, `codex resume ID`, or the recorded
-   `--resume-command`), and checks it is still alive two seconds later;
+   `--resume-command`), and checks it is still alive two seconds later. The
+   built-in forms accept only session ids made of letters, digits, `_`, `.`,
+   and `-`. A recorded `--resume-command` runs on TARGET as written, so only
+   move between hosts you trust;
 4. re-reads the source agent's state and ends SESSION on HOST, unless
    `--keep`. If the source agent reported again after its transcript was
-   copied, both sessions are left running with a warning, so nothing typed
-   there is lost.
+   copied, or is still running or waiting (a `--force` move), both sessions
+   are left running with a warning, so nothing typed there is lost.
 
 If any step fails, the source session keeps running.
 

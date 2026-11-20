@@ -96,6 +96,8 @@ launchctl, and publishing are separate approvals.
 - `Cargo.toml`, `Cargo.lock`: Cargo workspace; root Cargo commands cover `cli/`
 - `cli/src/` and `cli/tests/`: CLI, library, and integration tests
 - `cli/examples/config.toml`: manual file, `supervisor = "none"`
+- `skills/remote-development/SKILL.md`: agent skill installed by the Skills
+  CLI; update it when a command's behavior or safety rules change
 - `apps/cliproxy-ui/`: React/Vite management UI, built to one HTML file
 - `services/cliproxy-quota/`: quota endpoint and `cliproxyapi-util`, run by Bun
 - `nix/packages/fleet.nix`: both binaries, completions, wrapped PATH

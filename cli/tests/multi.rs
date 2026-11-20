@@ -305,8 +305,8 @@ fn copy_recursive_passes_scp_r() {
 /// Fake tmux that reports pane `%9` alive and names its session `agents`.
 const PANE_TMUX: &str = r#"#!/bin/sh
 case "$1" in
-  display-message) printf 'agents\n' ;;
-  list-panes) printf '%%9\n' ;;
+  display-message) printf '4242 agents\n' ;;
+  list-panes) printf '4242 %%9\n' ;;
 esac
 exit 0
 "#;
@@ -386,7 +386,7 @@ fn move_fixture(agent_state: &str) -> Fixture {
     fixture.respond(
         "workbox",
         "fleet-git-source",
-        "top=/home/dev/src/app\nbranch=feature/x\nremote=origin\nurl=git@example.test:dev/app.git\nhome=/home/dev\n",
+        "top=/home/dev/src/app\nbranch=topic\nremote=origin\nupstream=feature/x\nhead=0123abcd\nurl=git@example.test:dev/app.git\nhome=/home/dev\n",
         0,
     );
     fixture.respond("studio", "fleet-target-home", "home=/Users/dev\n", 0);
@@ -414,7 +414,8 @@ fn move_resumes_the_conversation_on_the_target_then_ends_the_source() {
             .unwrap_or_else(|| panic!("missing {call} in {calls:?}"))
     };
     assert!(position("studio fleet-target-prep") < position("studio fleet-transcript-write"));
-    assert!(position("studio fleet-transcript-write") < position("studio fleet-start"));
+    assert!(position("studio fleet-transcript-write") < position("studio fleet-transcript-commit"));
+    assert!(position("studio fleet-transcript-commit") < position("studio fleet-start"));
     assert!(position("studio fleet-start") < position("workbox fleet-stop"));
 
     assert_eq!(
@@ -427,8 +428,15 @@ fn move_resumes_the_conversation_on_the_target_then_ends_the_source() {
         .response_file("studio", "fleet-transcript-write", "cmd")
         .unwrap();
     assert!(
-        write.contains("/Users/dev/.claude/projects/-Users-dev-src-app/abc.jsonl"),
+        write.contains("/Users/dev/.claude/projects/-Users-dev-src-app/abc.jsonl.fleet-move.tmp"),
         "{write}"
+    );
+    let commit = fixture
+        .response_file("studio", "fleet-transcript-commit", "cmd")
+        .unwrap();
+    assert!(
+        commit.contains("abc.jsonl.fleet-move.tmp'\\'' '\\''/Users/dev/.claude/projects/-Users-dev-src-app/abc.jsonl'\\''"),
+        "{commit}"
     );
     let start = fixture
         .response_file("studio", "fleet-start", "cmd")
@@ -439,6 +447,14 @@ fn move_resumes_the_conversation_on_the_target_then_ends_the_source() {
         .response_file("studio", "fleet-target-prep", "cmd")
         .unwrap();
     assert!(prep.contains("git@example.test:dev/app.git"), "{prep}");
+    assert!(
+        prep.contains("origin/feature/x") && !prep.contains("origin/topic"),
+        "the target must track the upstream branch, not the local branch name: {prep}"
+    );
+    assert!(
+        prep.contains("--is-ancestor") && prep.contains("0123abcd"),
+        "{prep}"
+    );
     assert!(stdout.contains("attach with: fleet ssh studio agents"));
 }
 
@@ -511,10 +527,16 @@ fn wrapped_scripts_survive_posix_and_fish_login_shells() {
         fleet::ports::ports_script(),
         fleet::moving::source_repo_script("/home/dev/it's here"),
         fleet::moving::target_prep_script(
+            &fleet::moving::SourceRepo {
+                top: "/home/dev/it's here".into(),
+                branch: "topic".into(),
+                remote: "origin".into(),
+                upstream: "feature/x".into(),
+                head: "0123abcd".into(),
+                url: "git@example.test:dev/app.git".into(),
+                home: "/home/dev".into(),
+            },
             "/Users/dev/it's here",
-            "git@example.test:dev/app.git",
-            "origin",
-            "feature/x",
             "tmux",
             "agents",
         ),
@@ -554,6 +576,8 @@ fn move_does_not_end_a_source_agent_that_is_still_busy() {
     let (stdout, stderr, code) = Fixture::output_text(&output);
     assert_eq!(code, 0, "{stdout}{stderr}");
     assert!(stdout.contains("both sessions are running"), "{stdout}");
+    assert!(stdout.contains("is still"), "{stdout}");
+    assert!(!stdout.contains("reported activity"), "{stdout}");
     assert!(fixture
         .ssh_calls()
         .contains(&"studio fleet-start".to_string()));
@@ -588,6 +612,99 @@ fn move_fails_fast_when_the_transcript_writer_dies() {
     assert!(!fixture
         .ssh_calls()
         .contains(&"studio fleet-start".to_string()));
+}
+
+#[test]
+fn move_reports_a_failed_transcript_read_and_leaves_no_transcript_in_place() {
+    let fixture = move_fixture("done");
+    fixture.respond("workbox", "fleet-transcript-read", "", 1);
+    fs::write(
+        fixture
+            .responses()
+            .join("workbox.fleet-transcript-read.err"),
+        "cat: abc.jsonl: No such file or directory\n",
+    )
+    .unwrap();
+    let output = fixture
+        .fleet_scripted()
+        .args(["move", "workbox", "agents", "studio"])
+        .output()
+        .unwrap();
+    let (_, stderr, code) = Fixture::output_text(&output);
+    assert_eq!(code, 1);
+    assert!(stderr.contains("reading the source failed"), "{stderr}");
+    assert!(stderr.contains("No such file or directory"), "{stderr}");
+    let calls = fixture.ssh_calls();
+    assert!(calls.contains(&"studio fleet-transcript-discard".to_string()));
+    assert!(!calls.contains(&"studio fleet-transcript-commit".to_string()));
+    assert!(!calls.contains(&"studio fleet-start".to_string()));
+}
+
+#[test]
+fn move_refuses_option_like_git_values_from_the_source() {
+    let fixture = move_fixture("done");
+    fixture.respond(
+        "workbox",
+        "fleet-git-source",
+        "top=/home/dev/src/app\nbranch=topic\nremote=origin\nupstream=topic\nhead=0123abcd\nurl=--upload-pack=touch\nhome=/home/dev\n",
+        0,
+    );
+    let output = fixture
+        .fleet_scripted()
+        .args(["move", "workbox", "agents", "studio"])
+        .output()
+        .unwrap();
+    let (_, stderr, code) = Fixture::output_text(&output);
+    assert_eq!(code, 1);
+    assert!(stderr.contains("option-like"), "{stderr}");
+    assert!(fixture
+        .ssh_calls()
+        .iter()
+        .all(|call| !call.starts_with("studio")));
+}
+
+#[test]
+fn hook_never_exits_2_even_when_clap_rejects_its_arguments() {
+    let fixture = Fixture::new();
+    for args in [
+        &["hook", "--config"][..],
+        &["--config", "x", "hook", "--config"],
+    ] {
+        let output = fixture.fleet_scripted().args(args).output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{args:?}");
+    }
+    let output = fixture
+        .fleet_scripted()
+        .args(["list", "--bogus"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "other commands keep clap's status"
+    );
+}
+
+#[test]
+fn agent_text_cannot_write_escape_sequences_to_the_terminal() {
+    let fixture = three_host_fixture();
+    let agent = WORKBOX_AGENT
+        .replace("fix the build", "fix")
+        .replace("permission: Bash", "evil\\u001b[31mred")
+        .replace("\"agent\":\"claude\"", "\"agent\":\"cl\\u0007de\"");
+    fixture.respond("workbox", "fleet-probe", &probe(&agent), 0);
+    let output = fixture
+        .fleet_scripted()
+        .args(["agents", "workbox"])
+        .output()
+        .unwrap();
+    let (stdout, stderr, code) = Fixture::output_text(&output);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("evil?[31mred"), "{stdout}");
+    assert!(
+        !stdout.contains('\u{1b}') && !stdout.contains('\u{7}'),
+        "{stdout}"
+    );
 }
 
 #[test]

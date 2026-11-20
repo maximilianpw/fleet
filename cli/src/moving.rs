@@ -7,7 +7,8 @@
 //!
 //! Order: find the agent in SESSION on HOST; require a clean, pushed git
 //! branch there; prepare the same home-relative checkout on TARGET (clone if
-//! missing, fast-forward only); copy the transcript through this machine;
+//! missing, fast-forward only) and require it to contain the source commit;
+//! copy the transcript through this machine;
 //! start the agent's resume command in a detached tmux session on TARGET;
 //! then end the source session unless `--keep`.
 
@@ -17,8 +18,8 @@ use std::io::Write;
 use thiserror::Error;
 
 use crate::agents::{
-    clear_records, local_agents, now_secs, resume_command, tmux_panes, AgentEnv, AgentRecord,
-    AgentState,
+    clear_records, local_agents, now_secs, parse_agent_records, resume_command, tmux_panes,
+    AgentEnv, AgentRecord, AgentState,
 };
 use crate::config::{is_safe_session_name, FleetConfig, DEFAULT_TMUX_COMMAND};
 use crate::remote::{
@@ -112,6 +113,9 @@ pub struct SourceRepo {
     pub top: String,
     pub branch: String,
     pub remote: String,
+    /// The upstream's branch name on `remote`, which may differ from `branch`.
+    pub upstream: String,
+    pub head: String,
     pub url: String,
     pub home: String,
 }
@@ -123,11 +127,15 @@ cd {cwd} || exit 10; \
 top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 11; \
 [ -z \"$(git status --porcelain)\" ] || exit 12; \
 branch=$(git symbolic-ref --short -q HEAD) || exit 13; \
-upstream=$(git rev-parse --abbrev-ref --symbolic-full-name @{{u}} 2>/dev/null) || exit 14; \
-[ \"$(git rev-parse HEAD)\" = \"$(git rev-parse @{{u}})\" ] || exit 15; \
-remote=${{upstream%%/*}}; \
+git rev-parse -q --verify @{{u}} >/dev/null 2>&1 || exit 14; \
+remote=$(git config --get \"branch.$branch.remote\") || exit 14; \
+merge=$(git config --get \"branch.$branch.merge\") || exit 14; \
+url=$(git remote get-url \"$remote\" 2>/dev/null) || exit 14; \
+head=$(git rev-parse HEAD); \
+[ \"$head\" = \"$(git rev-parse @{{u}})\" ] || exit 15; \
 echo \"top=$top\"; echo \"branch=$branch\"; echo \"remote=$remote\"; \
-echo \"url=$(git remote get-url \"$remote\")\"; echo \"home=$HOME\"",
+echo \"upstream=${{merge#refs/heads/}}\"; echo \"head=$head\"; \
+echo \"url=$url\"; echo \"home=$HOME\"",
         cwd = sh_quote(cwd)
     )
 }
@@ -138,7 +146,7 @@ fn source_failure(code: i32) -> &'static str {
         11 => "the agent's working directory is not a git repository",
         12 => "the checkout has uncommitted or untracked changes; commit and push first",
         13 => "the checkout is not on a branch",
-        14 => "the branch has no upstream; push it first",
+        14 => "the branch has no upstream on a remote; push it first",
         15 => "the branch is not pushed (HEAD differs from its upstream); push first",
         _ => "checking the source checkout failed",
     }
@@ -156,14 +164,7 @@ pub fn target_home_script() -> String {
     ": fleet-target-home; echo \"home=$HOME\"".to_string()
 }
 
-pub fn target_prep_script(
-    dir: &str,
-    url: &str,
-    remote: &str,
-    branch: &str,
-    tmux: &str,
-    session: &str,
-) -> String {
+pub fn target_prep_script(repo: &SourceRepo, dir: &str, tmux: &str, session: &str) -> String {
     let parent = dir
         .rsplit_once('/')
         .map(|(parent, _)| parent)
@@ -179,18 +180,21 @@ cd {dir} || exit 24; \
 git fetch --quiet {remote} || exit 26; \
 else \
 mkdir -p {parent} || exit 27; \
-git clone --quiet -o {remote} {url} {dir} || exit 28; \
+git clone --quiet -o {remote} -- {url} {dir} || exit 28; \
 cd {dir} || exit 24; \
 fi; \
 if git rev-parse -q --verify refs/heads/{branch} >/dev/null; then git checkout --quiet {branch} || exit 29; \
-else git checkout --quiet -b {branch} --track {remote}/{branch} || exit 29; fi; \
-git merge --ff-only --quiet {remote}/{branch} || exit 30; \
+else git checkout --quiet -b {branch} --track {tracking} || exit 29; fi; \
+git merge --ff-only --quiet {tracking} || exit 30; \
+git merge-base --is-ancestor {head} HEAD || exit 31; \
 echo ok",
         dir = sh_quote(dir),
         parent = sh_quote(parent),
-        url = sh_quote(url),
-        remote = sh_quote(remote),
-        branch = sh_quote(branch),
+        url = sh_quote(&repo.url),
+        remote = sh_quote(&repo.remote),
+        branch = sh_quote(&repo.branch),
+        tracking = sh_quote(&format!("{}/{}", repo.remote, repo.upstream)),
+        head = sh_quote(&repo.head),
         session = sh_quote(session),
     )
 }
@@ -207,6 +211,7 @@ fn target_failure(code: i32) -> &'static str {
         28 => "git clone failed",
         29 => "cannot check out the branch",
         30 => "the target branch cannot fast-forward to the upstream (it has diverged)",
+        31 => "the target branch does not contain the commit the source is on",
         _ => "preparing the target checkout failed",
     }
 }
@@ -314,14 +319,15 @@ fn agents_on(
             },
         });
     }
-    serde_json::from_str(&output.stdout).map_err(|error| MoveError::AgentState {
+    parse_agent_records(&output.stdout).ok_or_else(|| MoveError::AgentState {
         host: side.name.clone(),
-        reason: format!("unexpected output: {error}"),
+        reason: "`fleet agents --local --json` did not print a list of records".into(),
     })
 }
 
 /// Why the source agent must not be ended: it reported again after the
-/// transcript was read, or its state can no longer be read.
+/// transcript was read, it is still working (a forced move), or its state
+/// can no longer be read.
 fn source_changed(
     source: &Side,
     record: &AgentRecord,
@@ -333,8 +339,11 @@ fn source_changed(
         Err(error) => return Some(format!("could not re-check the source agent ({error})")),
     };
     match current {
-        Some(agent) if agent.updated_at != record.updated_at || agent.state.is_busy() => {
+        Some(agent) if agent.updated_at != record.updated_at => {
             Some("the source agent reported activity after its transcript was copied".to_string())
+        }
+        Some(agent) if agent.state.is_busy() => {
+            Some(format!("the source agent is still {}", agent.state.label()))
         }
         _ => None,
     }
@@ -410,25 +419,54 @@ pub fn run_move(
         return Err(step_error(&source, &output, source_failure(output.code)));
     }
     let facts = parse_key_values(&output.stdout);
+    let fact = |key: &str| facts.get(key).cloned().unwrap_or_default();
     let repo = SourceRepo {
-        top: facts.get("top").cloned().unwrap_or_default(),
-        branch: facts.get("branch").cloned().unwrap_or_default(),
-        remote: facts.get("remote").cloned().unwrap_or_default(),
-        url: facts.get("url").cloned().unwrap_or_default(),
-        home: facts.get("home").cloned().unwrap_or_default(),
+        top: fact("top"),
+        branch: fact("branch"),
+        remote: fact("remote"),
+        upstream: fact("upstream"),
+        head: fact("head"),
+        url: fact("url"),
+        home: fact("home"),
     };
-    if [&repo.top, &repo.branch, &repo.remote, &repo.url, &repo.home]
-        .iter()
-        .any(|value| value.is_empty())
-    {
+    let reported = [
+        &repo.top,
+        &repo.branch,
+        &repo.remote,
+        &repo.upstream,
+        &repo.head,
+        &repo.url,
+        &repo.home,
+    ];
+    if reported.iter().any(|value| value.is_empty()) {
         return Err(step_error(
             &source,
             &output,
-            "the source checkout did not report its branch, upstream, and home",
+            "the source checkout did not report its branch, upstream, commit, and home",
         ));
     }
-    for value in [&repo.top, &repo.branch, &repo.remote, &repo.url, &repo.home] {
+    for value in reported {
         validate_script_value(value)?;
+    }
+    // These become git arguments on the target, where a leading `-` would be
+    // read as an option.
+    let option_like = [&repo.branch, &repo.remote, &repo.upstream, &repo.url]
+        .into_iter()
+        .find(|value| value.starts_with('-'));
+    if let Some(value) = option_like {
+        return Err(MoveError::Step {
+            host: source.name.clone(),
+            reason: format!("the source checkout reported an option-like git value: {value}"),
+        });
+    }
+    if !repo.head.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(MoveError::Step {
+            host: source.name.clone(),
+            reason: format!(
+                "the source checkout reported an invalid commit: {}",
+                repo.head
+            ),
+        });
     }
 
     let output = runner.run(&target.endpoint, &target_home_script());
@@ -455,14 +493,7 @@ pub fn run_move(
     // A clone or fetch can take minutes; the query default is 20 seconds.
     let output = runner.clone().with_timeout(TRANSFER_TIMEOUT).run(
         &target.endpoint,
-        &target_prep_script(
-            &target_top,
-            &repo.url,
-            &repo.remote,
-            &repo.branch,
-            &target.tmux,
-            &request.session,
-        ),
+        &target_prep_script(&repo, &target_top, &target.tmux, &request.session),
     );
     if !output.success() {
         return Err(step_error(&target, &output, target_failure(output.code)));
@@ -480,17 +511,46 @@ pub fn run_move(
             .map(|(dir, _)| dir.to_string())
             .unwrap_or_else(|| ".".into());
         writeln!(out, "fleet: copying the transcript to {destination}")?;
-        runner.pipe(
+        // A failed read still ends the writer's input cleanly, so the writer
+        // cannot tell a complete transcript from a cut-off one. Only this
+        // side can, and it puts the file in place after both succeeded.
+        let partial = format!("{destination}.fleet-move.tmp");
+        let copied = runner.pipe(
             &source.endpoint,
             &format!(": fleet-transcript-read; cat -- {}", sh_quote(transcript)),
             &target.endpoint,
             &format!(
                 ": fleet-transcript-write; mkdir -p {} && cat > {}",
                 sh_quote(&dest_dir),
-                sh_quote(&destination)
+                sh_quote(&partial)
             ),
             TRANSFER_TIMEOUT,
-        )?;
+        );
+        if let Err(error) = copied {
+            runner.run(
+                &target.endpoint,
+                &format!(
+                    ": fleet-transcript-discard; rm -f -- {}",
+                    sh_quote(&partial)
+                ),
+            );
+            return Err(error.into());
+        }
+        let output = runner.run(
+            &target.endpoint,
+            &format!(
+                ": fleet-transcript-commit; mv -f -- {} {}",
+                sh_quote(&partial),
+                sh_quote(&destination)
+            ),
+        );
+        if !output.success() {
+            return Err(step_error(
+                &target,
+                &output,
+                "cannot put the copied transcript in place",
+            ));
+        }
     }
 
     writeln!(
@@ -563,6 +623,7 @@ mod tests {
             cwd: None,
             tmux_session: Some("main".into()),
             tmux_pane: Some("%1".into()),
+            tmux_server: None,
             updated_at: 0,
         }
     }
@@ -623,15 +684,19 @@ mod tests {
 
     #[test]
     fn scripts_quote_values_and_have_no_backslashes() {
-        let prep = target_prep_script(
-            "/home/dev/Local/it's",
-            "git@example.test:me/app.git",
-            "origin",
-            "feature/x",
-            "tmux",
-            "main",
-        );
+        let repo = SourceRepo {
+            top: "/Users/dev/Local/it's".into(),
+            branch: "topic".into(),
+            remote: "origin".into(),
+            upstream: "feature/x".into(),
+            head: "0123abcd".into(),
+            url: "git@example.test:me/app.git".into(),
+            home: "/Users/dev".into(),
+        };
+        let prep = target_prep_script(&repo, "/home/dev/Local/it's", "tmux", "main");
         assert!(prep.contains("'/home/dev/Local/it'\"'\"'s'"));
+        assert!(prep.contains("--track 'origin/feature/x'"), "{prep}");
+        assert!(prep.contains("--is-ancestor '0123abcd' HEAD"), "{prep}");
         for script in [
             prep,
             source_repo_script("/Users/dev/app"),

@@ -96,6 +96,13 @@ cargo install --locked --git https://github.com/maximilianpw/fleet --tag v0.1.0 
 Shell completions: `fleet completions bash|zsh|fish`. The Nix package
 installs them for you.
 
+**Agent skill**, so coding agents know how to drive Fleet, with the
+[Skills CLI](https://github.com/vercel-labs/skills):
+
+```sh
+npx skills add maximilianpw/fleet --global --skill remote-development --yes
+```
+
 ## Configure
 
 Fleet reads one TOML file, by default `~/.config/fleet/config.toml`. Each host
@@ -179,6 +186,7 @@ This repository is a small monorepo:
 | `apps/cliproxy-ui/` | A management UI for CLIProxyAPI, packaged as one HTML file |
 | `services/cliproxy-quota/` | A quota endpoint for CLIProxyAPI ([README](services/cliproxy-quota/README.md)) |
 | `docs/` | Configuration, agents, compatibility, and migration notes |
+| `skills/` | The `remote-development` agent skill for driving Fleet |
 
 The CLIProxy pieces are packaged here for convenience and are independent of
 the CLI.

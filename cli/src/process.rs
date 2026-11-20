@@ -32,6 +32,7 @@ pub struct ProcessEnv {
     pub home: Option<PathBuf>,
     pub xdg_config_home: Option<PathBuf>,
     pub fleet_config: Option<PathBuf>,
+    pub xdg_runtime_dir: Option<PathBuf>,
     pub shell: Option<OsString>,
     pub path: Option<OsString>,
 }
@@ -46,6 +47,9 @@ impl ProcessEnv {
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from),
             fleet_config: std::env::var_os("FLEET_CONFIG")
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from),
+            xdg_runtime_dir: std::env::var_os("XDG_RUNTIME_DIR")
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from),
             shell: std::env::var_os("SHELL").filter(|v| !v.is_empty()),

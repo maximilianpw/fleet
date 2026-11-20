@@ -203,8 +203,32 @@ enum TunnelCli {
     },
 }
 
+fn invoked_hook() -> bool {
+    let mut args = std::env::args_os().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--config" {
+            args.next();
+        } else if !arg.to_string_lossy().starts_with("--config=") {
+            return arg == "hook";
+        }
+    }
+    false
+}
+
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => {
+            let _ = error.print();
+            // Claude Code reads exit 2 from a hook as "block", so a hook
+            // command clap rejects must not use clap's usual status.
+            let code = match error.exit_code() {
+                2 if invoked_hook() => 1,
+                code => code,
+            };
+            return ExitCode::from(code as u8);
+        }
+    };
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

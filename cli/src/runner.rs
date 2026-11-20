@@ -171,6 +171,13 @@ fn supervise_child(cfg: &RunnerConfig, child: &mut std::process::Child) -> Child
             }
             match child_owns_loopback_listen(cfg, child.id()) {
                 ListenerProbe::Listening => healthy = true,
+                ListenerProbe::Unavailable(err) => {
+                    let _ = writeln!(
+                        io::stderr(),
+                        "fleet-tunnel-runner: cannot run the listener check ({err}); keeping ssh without it"
+                    );
+                    healthy = true;
+                }
                 ListenerProbe::Stopped(code) => {
                     kill_owned(child);
                     return ChildOutcome::Stop(code);
@@ -254,6 +261,9 @@ fn kill_owned(child: &mut std::process::Child) {
 enum ListenerProbe {
     Listening,
     NotListening,
+    /// The check itself could not start, which says nothing about ssh.
+    /// `ExitOnForwardFailure` still ends an ssh that cannot bind the port.
+    Unavailable(io::Error),
     Stopped(i32),
 }
 
@@ -276,7 +286,8 @@ fn child_owns_loopback_listen(cfg: &RunnerConfig, pid: u32) -> ListenerProbe {
         || stop_exit_code(cfg),
     ) {
         Ok(Ok(output)) if !output.timed_out && output.code == 0 => ListenerProbe::Listening,
-        Ok(Ok(_)) | Err(_) => ListenerProbe::NotListening,
+        Ok(Ok(_)) => ListenerProbe::NotListening,
+        Err(err) => ListenerProbe::Unavailable(err),
         Ok(Err(code)) => ListenerProbe::Stopped(code),
     }
 }

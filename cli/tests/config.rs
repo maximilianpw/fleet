@@ -563,6 +563,7 @@ fn cli_config_wins_over_env_and_xdg() {
         fleet_config: Some(env_path.clone()),
         shell: None,
         path: None,
+        ..ProcessEnv::default()
     };
     let loaded = load_config(Some(&flag), &env).expect("flag config");
     assert_eq!(loaded.current_host, "workbox");
@@ -581,6 +582,7 @@ fn env_config_wins_over_xdg() {
         fleet_config: Some(env_path),
         shell: None,
         path: None,
+        ..ProcessEnv::default()
     };
     let loaded = load_config(None, &env).expect("env config");
     assert_eq!(loaded.current_host, "workbox");
@@ -598,6 +600,7 @@ fn xdg_wins_over_home_default() {
         fleet_config: None,
         shell: None,
         path: None,
+        ..ProcessEnv::default()
     };
     let loaded = load_config(None, &env).expect("xdg config");
     assert_eq!(loaded.current_host, "workbox");
@@ -613,6 +616,7 @@ fn home_default_used_when_xdg_unset() {
         fleet_config: None,
         shell: None,
         path: None,
+        ..ProcessEnv::default()
     };
     let origin = resolve_config_origin(None, &env).expect("origin");
     match origin {
@@ -636,6 +640,7 @@ fn missing_explicit_config_does_not_fall_back() {
         fleet_config: None,
         shell: None,
         path: None,
+        ..ProcessEnv::default()
     };
     let error = load_config(Some(&missing), &env).unwrap_err();
     match error {
@@ -655,6 +660,7 @@ fn missing_env_config_does_not_fall_back() {
         fleet_config: Some(missing.clone()),
         shell: None,
         path: None,
+        ..ProcessEnv::default()
     };
     let error = load_config(None, &env).unwrap_err();
     match error {
@@ -671,6 +677,7 @@ fn missing_default_config_is_a_setup_error() {
         fleet_config: None,
         shell: None,
         path: None,
+        ..ProcessEnv::default()
     };
     let error = load_config(None, &env).unwrap_err();
     match error {

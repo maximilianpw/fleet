@@ -11,7 +11,9 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::agents::{age_label, local_agents, tmux_panes, AgentEnv, AgentRecord, AgentState};
+use crate::agents::{
+    age_label, local_agents, parse_agent_records, tmux_panes, AgentEnv, AgentRecord, AgentState,
+};
 use crate::config::{FleetConfig, ResolvedHost, DEFAULT_TMUX_COMMAND};
 use crate::doctor::{classify_ssh_stderr, DoctorEvent, SshState};
 use crate::process::run_with_deadline;
@@ -168,11 +170,7 @@ fn snapshot_from_probe(host: &str, presence: Presence, output: &QueryOutput) -> 
         _ => (TmuxPresence::Unknown, Vec::new()),
     };
     let fleet = parse_fleet_version(&sections.fleet);
-    let agents = if sections.agents.trim().is_empty() {
-        None
-    } else {
-        serde_json::from_str::<Vec<AgentRecord>>(&sections.agents).ok()
-    };
+    let agents = parse_agent_records(&sections.agents);
     HostSnapshot {
         host: host.to_string(),
         presence,
@@ -347,6 +345,14 @@ pub fn doctor_tool_events(resolved: &ResolvedHost, runner: &Runner) -> Vec<Docto
     events
 }
 
+/// Text reported by a host, made safe to print: session names, agent names,
+/// and versions arrive over SSH and could carry terminal escape sequences.
+fn printable(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { '?' } else { c })
+        .collect()
+}
+
 fn agent_summary(snapshot: &HostSnapshot) -> String {
     let Some(agents) = &snapshot.agents else {
         return match (&snapshot.reach, &snapshot.fleet) {
@@ -401,7 +407,7 @@ pub fn render_status(current_host: &str, snapshots: &[HostSnapshot], now: u64) -
             other => other.path_label(),
         };
         let fleet = match &snapshot.fleet {
-            FleetPresence::Version(version) => version.clone(),
+            FleetPresence::Version(version) => printable(version),
             FleetPresence::Missing => "missing".into(),
             FleetPresence::Unknown => "-".into(),
         };
@@ -413,10 +419,11 @@ pub fn render_status(current_host: &str, snapshots: &[HostSnapshot], now: u64) -
                 .sessions
                 .iter()
                 .map(|session| {
+                    let name = printable(&session.name);
                     if session.attached {
-                        format!("{}*", session.name)
+                        format!("{name}*")
                     } else {
-                        session.name.clone()
+                        name
                     }
                 })
                 .collect::<Vec<_>>()
@@ -473,11 +480,11 @@ pub fn render_agent_rows(snapshots: &[HostSnapshot], now: u64) -> String {
             out,
             "{:<18} {:<14} {:<13} {:<8} {:<5} {}",
             host,
-            agent.tmux_session.as_deref().unwrap_or("-"),
+            printable(agent.tmux_session.as_deref().unwrap_or("-")),
             agent.state.label(),
-            agent.agent,
+            printable(&agent.agent),
             age_label(now, agent.updated_at),
-            agent.detail()
+            printable(agent.detail())
         );
     }
     out

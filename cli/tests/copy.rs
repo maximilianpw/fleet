@@ -45,6 +45,18 @@ fn copy_current_host_endpoint_becomes_local_path() {
 }
 
 #[test]
+fn copy_current_host_path_with_a_colon_is_not_handed_to_scp_as_a_host() {
+    let config = parse_config(MINIMAL_TOML).unwrap();
+    let planned = plan_copy(&config, "laptop:notes:draft.md", "workbox:/tmp/").unwrap();
+    assert_eq!(
+        arg_strs(&planned),
+        ["--", "./notes:draft.md", "workbox:/tmp/"]
+    );
+    let planned = plan_copy(&config, "laptop:/tmp/a:b", "workbox:/tmp/").unwrap();
+    assert_eq!(arg_strs(&planned), ["--", "/tmp/a:b", "workbox:/tmp/"]);
+}
+
+#[test]
 fn copy_local_colon_path_with_explicit_prefix_stays_local() {
     let config = parse_config(MINIMAL_TOML).unwrap();
     let planned = plan_copy(&config, "./report:final.md", "workbox").unwrap();

@@ -106,6 +106,8 @@ pub struct Peer {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Status {
+    #[serde(default)]
+    pub backend_state: String,
     #[serde(rename = "Self", default)]
     pub this: Option<Peer>,
     #[serde(default)]
@@ -116,7 +118,16 @@ pub fn parse_status(json: &str) -> Option<Status> {
     serde_json::from_str(json).ok()
 }
 
+impl Status {
+    /// False while Tailscale is stopped or logged out. Its peer list then
+    /// says every peer is offline, which is not evidence about the peers.
+    pub fn backend_running(&self) -> bool {
+        self.backend_state.is_empty() || self.backend_state == "Running"
+    }
+}
+
 /// Read `tailscale status --json` from PATH, or the macOS app bundle CLI.
+/// `None` unless Tailscale is running, so presence stays unknown.
 pub fn read_status() -> Option<Status> {
     for program in ["tailscale", MACOS_APP_CLI] {
         let mut cmd = Command::new(program);
@@ -131,7 +142,7 @@ pub fn read_status() -> Option<Status> {
         };
         // `tailscale status` exits non-zero when logged out but still prints JSON.
         if let Some(status) = parse_status(&String::from_utf8_lossy(&output.stdout)) {
-            return Some(status);
+            return status.backend_running().then_some(status);
         }
     }
     None
@@ -318,6 +329,16 @@ long_running_agents = false
         assert_eq!(presence["laptop"], Presence::This);
         assert_eq!(presence["workbox"], Presence::Unknown);
         assert_eq!(presence["workbox"].online(), None);
+    }
+
+    #[test]
+    fn a_stopped_backend_is_not_evidence_about_peers() {
+        let stopped = parse_status(r#"{"BackendState": "Stopped", "Peer": {}}"#).unwrap();
+        assert!(!stopped.backend_running());
+        assert!(parse_status(STATUS).unwrap().backend_running());
+        assert!(parse_status(r#"{"BackendState": "Running"}"#)
+            .unwrap()
+            .backend_running());
     }
 
     #[test]
