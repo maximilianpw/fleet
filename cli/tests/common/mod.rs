@@ -202,6 +202,16 @@ impl Fixture {
         fs::write(dir.join(format!("{target}.{step}.code")), code.to_string()).expect("code");
     }
 
+    pub fn respond_nth(&self, target: &str, step: &str, call: usize, stdout: &str, code: i32) {
+        let dir = self.responses();
+        fs::write(dir.join(format!("{target}.{step}.{call}.out")), stdout).expect("response");
+        fs::write(
+            dir.join(format!("{target}.{step}.{call}.code")),
+            code.to_string(),
+        )
+        .expect("code");
+    }
+
     /// `TARGET STEP` lines in call order.
     pub fn ssh_calls(&self) -> Vec<String> {
         read_lines(&self.responses().join("calls")).unwrap_or_default()
@@ -284,13 +294,19 @@ if [ -n "${FLEET_SSH_RESPONSES:-}" ]; then
   for arg in "$@"; do
     printf '%s\n' "$arg" >> "$dir/$target.$step.args"
   done
+  count_file="$dir/$target.$step.count"
+  count=1
+  if [ -f "$count_file" ]; then count=$(( $(cat "$count_file") + 1 )); fi
+  printf '%s' "$count" > "$count_file"
+  reply="$dir/$target.$step"
+  if [ -f "$reply.$count.code" ]; then reply="$reply.$count"; fi
   code=0
-  if [ -f "$dir/$target.$step.code" ]; then code=$(cat "$dir/$target.$step.code"); fi
+  if [ -f "$reply.code" ]; then code=$(cat "$reply.code"); fi
   if [ "$step" = fleet-transcript-write ] && [ "$code" = 0 ]; then
     cat > "$dir/$target.$step.stdin"
   fi
-  if [ -f "$dir/$target.$step.out" ]; then cat "$dir/$target.$step.out"; fi
-  if [ -f "$dir/$target.$step.err" ]; then cat "$dir/$target.$step.err" >&2; fi
+  if [ -f "$reply.out" ]; then cat "$reply.out"; fi
+  if [ -f "$reply.err" ]; then cat "$reply.err" >&2; fi
   exit "$code"
 fi
 log=${FLEET_SSH_ARGS_LOG:?}

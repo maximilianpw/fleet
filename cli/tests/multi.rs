@@ -514,6 +514,193 @@ fn move_keeps_source_when_the_target_session_dies() {
         .contains(&"workbox fleet-stop".to_string()));
 }
 
+fn run_move(fixture: &Fixture, args: &[&str]) -> (String, String, i32) {
+    let output = fixture
+        .fleet_scripted()
+        .arg("move")
+        .args(args)
+        .output()
+        .unwrap();
+    Fixture::output_text(&output)
+}
+
+fn assert_no_studio_calls(fixture: &Fixture) {
+    assert!(
+        fixture
+            .ssh_calls()
+            .iter()
+            .all(|call| !call.starts_with("studio")),
+        "{:?}",
+        fixture.ssh_calls()
+    );
+}
+
+#[test]
+fn move_keeps_both_sessions_when_the_source_agent_reported_again() {
+    let fixture = move_fixture("done");
+    fixture.respond_nth(
+        "workbox",
+        "fleet-agents",
+        2,
+        &WORKBOX_AGENT
+            .replace("needs-input", "done")
+            .replace("\"updated_at\":1", "\"updated_at\":2"),
+        0,
+    );
+    let (stdout, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
+    // plan 003 changes this exit code
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stdout.contains("reported activity"), "{stdout}");
+    let calls = fixture.ssh_calls();
+    assert!(
+        calls.contains(&"studio fleet-start".to_string()),
+        "{calls:?}"
+    );
+    assert!(
+        !calls.contains(&"workbox fleet-stop".to_string()),
+        "{calls:?}"
+    );
+}
+
+#[test]
+fn move_reports_when_stopping_the_source_fails() {
+    let fixture = move_fixture("done");
+    fixture.respond("workbox", "fleet-stop", "", 1);
+    let (stdout, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
+    // plan 003 changes this exit code
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(
+        stdout.contains("could not end agents on workbox"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn move_refuses_a_session_without_agents() {
+    let fixture = move_fixture("done");
+    fixture.respond("workbox", "fleet-agents", "[]", 0);
+    let (_, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("no agent has reported"), "{stderr}");
+    assert_no_studio_calls(&fixture);
+}
+
+#[test]
+fn move_refuses_a_session_with_two_agents() {
+    let fixture = move_fixture("done");
+    let first = WORKBOX_AGENT
+        .replace("needs-input", "done")
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+    let second = first
+        .replace("\"key\":\"pane-4\"", "\"key\":\"pane-5\"")
+        .replace("\"tmux_pane\":\"%4\"", "\"tmux_pane\":\"%5\"");
+    fixture.respond("workbox", "fleet-agents", &format!("[{first},{second}]"), 0);
+    let (_, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("has 2 agents"), "{stderr}");
+    assert_no_studio_calls(&fixture);
+}
+
+#[test]
+fn move_refuses_an_agent_without_a_resume_command() {
+    let fixture = move_fixture("done");
+    fixture.respond(
+        "workbox",
+        "fleet-agents",
+        &WORKBOX_AGENT
+            .replace("needs-input", "done")
+            .replace("\"agent\":\"claude\"", "\"agent\":\"pi\""),
+        0,
+    );
+    let (_, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("no known resume command"), "{stderr}");
+    assert_no_studio_calls(&fixture);
+}
+
+#[test]
+fn move_refuses_an_agent_without_a_cwd() {
+    let fixture = move_fixture("done");
+    fixture.respond(
+        "workbox",
+        "fleet-agents",
+        &WORKBOX_AGENT
+            .replace("needs-input", "done")
+            .replace("\"cwd\":\"/home/dev/src/app\",", ""),
+        0,
+    );
+    let (_, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("has no cwd"), "{stderr}");
+    assert_no_studio_calls(&fixture);
+}
+
+#[test]
+fn move_refuses_a_checkout_outside_the_home_directory() {
+    let fixture = move_fixture("done");
+    fixture.respond(
+        "workbox",
+        "fleet-git-source",
+        "top=/srv/app\nbranch=topic\nremote=origin\nupstream=feature/x\nhead=0123abcd\nurl=git@example.test:dev/app.git\nhome=/home/dev\n",
+        0,
+    );
+    let (_, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("outside the home directory"), "{stderr}");
+    assert!(!fixture
+        .ssh_calls()
+        .contains(&"studio fleet-target-prep".to_string()));
+}
+
+#[test]
+fn move_explains_each_source_checkout_failure() {
+    for (exit, message) in [
+        (10, "no longer exists"),
+        (11, "not a git repository"),
+        (12, "uncommitted"),
+        (13, "not on a branch"),
+        (14, "no upstream"),
+    ] {
+        let fixture = move_fixture("done");
+        fixture.respond("workbox", "fleet-git-source", "", exit);
+        let (_, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
+        assert_eq!(code, 1, "exit {exit}: {stderr}");
+        assert!(stderr.contains(message), "exit {exit}: {stderr}");
+        assert_no_studio_calls(&fixture);
+    }
+}
+
+#[test]
+fn move_explains_each_target_preparation_failure() {
+    for (exit, message) in [
+        (21, "git is not installed"),
+        (22, "tmux is not installed"),
+        (23, "already exists"),
+        (25, "uncommitted changes"),
+        (26, "git fetch failed"),
+        (28, "git clone failed"),
+        (30, "diverged"),
+        (31, "does not contain the commit"),
+    ] {
+        let fixture = move_fixture("done");
+        fixture.respond("studio", "fleet-target-prep", "", exit);
+        let (_, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
+        assert_eq!(code, 1, "exit {exit}: {stderr}");
+        assert!(stderr.contains(message), "exit {exit}: {stderr}");
+        let calls = fixture.ssh_calls();
+        assert!(
+            !calls.contains(&"studio fleet-start".to_string()),
+            "{calls:?}"
+        );
+        assert!(
+            !calls.contains(&"workbox fleet-stop".to_string()),
+            "{calls:?}"
+        );
+    }
+}
+
 /// Every remote script must reach `sh` byte-for-byte through a POSIX or fish
 /// login shell. Replacing the leading `sh -c` with `printf %s` echoes what
 /// `sh` would have received.
