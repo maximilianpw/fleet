@@ -119,10 +119,16 @@ Then it:
 4. re-reads the source agent's state and ends SESSION on HOST, unless
    `--keep`. If the source agent reported again after its transcript was
    copied, is still running or waiting (a `--force` move), or its pane is
-   no longer in SESSION, both sessions are left running with a warning, so
-   nothing typed there is lost.
+   no longer in SESSION, both sessions are left running and `fleet move` exits
+   3, so nothing typed there is lost.
 
 If any step fails, the source session keeps running.
+
+Exit status: 0 the session moved (or the source was kept with `--keep`);
+1 the move was refused or failed and the source is untouched; 2 invalid
+arguments; 3 the session runs on TARGET but was not ended on HOST. When
+Fleet could not confirm that the target session started, it exits 1 and
+says the target may already be running.
 
 Transcript placement relies on agent internals that may change:
 

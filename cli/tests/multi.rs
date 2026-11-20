@@ -548,9 +548,9 @@ fn move_keeps_both_sessions_when_the_source_agent_reported_again() {
         0,
     );
     let (stdout, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
-    // plan 003 changes this exit code
-    assert_eq!(code, 0, "{stdout}{stderr}");
-    assert!(stdout.contains("reported activity"), "{stdout}");
+    assert_eq!(code, 3, "{stdout}{stderr}");
+    assert!(stderr.contains("reported activity"), "{stderr}");
+    assert!(!stdout.contains("fleet: moved"), "{stdout}");
     let calls = fixture.ssh_calls();
     assert!(
         calls.contains(&"studio fleet-start".to_string()),
@@ -576,8 +576,9 @@ fn move_does_not_end_a_session_the_agent_pane_has_left() {
         0,
     );
     let (stdout, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
-    assert_eq!(code, 0, "{stdout}{stderr}");
-    assert!(stdout.contains("no longer in session agents"), "{stdout}");
+    assert_eq!(code, 3, "{stdout}{stderr}");
+    assert!(stderr.contains("no longer in session agents"), "{stderr}");
+    assert!(!stdout.contains("fleet: moved"), "{stdout}");
     let calls = fixture.ssh_calls();
     assert!(
         calls.contains(&"studio fleet-start".to_string()),
@@ -594,12 +595,39 @@ fn move_reports_when_stopping_the_source_fails() {
     let fixture = move_fixture("done");
     fixture.respond("workbox", "fleet-stop", "", 1);
     let (stdout, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
-    // plan 003 changes this exit code
-    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert_eq!(code, 3, "{stdout}{stderr}");
     assert!(
-        stdout.contains("could not end agents on workbox"),
-        "{stdout}"
+        stderr.contains("could not end the source session"),
+        "{stderr}"
     );
+    assert!(!stdout.contains("fleet: moved"), "{stdout}");
+}
+
+#[test]
+fn move_says_the_target_may_be_running_when_the_start_is_cut_off() {
+    let fixture = move_fixture("done");
+    fixture.respond("studio", "fleet-start", "", 255);
+    let (stdout, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
+    assert_eq!(code, 1, "{stdout}{stderr}");
+    assert!(
+        stderr.contains("may already be running on studio"),
+        "{stderr}"
+    );
+    assert!(!fixture
+        .ssh_calls()
+        .contains(&"workbox fleet-stop".to_string()));
+}
+
+#[test]
+fn move_keep_exits_zero_and_leaves_the_source_running() {
+    let fixture = move_fixture("done");
+    let (stdout, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio", "--keep"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stdout.contains("kept the source session"), "{stdout}");
+    assert!(stdout.contains("fleet: moved"), "{stdout}");
+    assert!(!fixture
+        .ssh_calls()
+        .contains(&"workbox fleet-stop".to_string()));
 }
 
 #[test]
@@ -788,9 +816,9 @@ fn move_does_not_end_a_source_agent_that_is_still_busy() {
         .output()
         .unwrap();
     let (stdout, stderr, code) = Fixture::output_text(&output);
-    assert_eq!(code, 0, "{stdout}{stderr}");
-    assert!(stdout.contains("both sessions are running"), "{stdout}");
-    assert!(stdout.contains("is still"), "{stdout}");
+    assert_eq!(code, 3, "{stdout}{stderr}");
+    assert!(stderr.contains("is still"), "{stderr}");
+    assert!(!stdout.contains("fleet: moved"), "{stdout}");
     assert!(!stdout.contains("reported activity"), "{stdout}");
     assert!(fixture
         .ssh_calls()

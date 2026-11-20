@@ -51,6 +51,13 @@ pub enum MoveError {
     MissingField(&'static str),
     #[error("fleet: could not read agent state on {host}: {reason}")]
     AgentState { host: String, reason: String },
+    #[error("fleet: {session} now runs on {target}, but it was not ended on {source_host}: {reason}; end it there yourself once you have checked it, then attach with: fleet ssh {target} {session}")]
+    BothRunning {
+        session: String,
+        source_host: String,
+        target: String,
+        reason: String,
+    },
     #[error("fleet: {host}: {reason}")]
     Step { host: String, reason: String },
     #[error(transparent)]
@@ -64,6 +71,7 @@ impl MoveError {
         match self {
             Self::UnknownHost(_) | Self::SameHost | Self::InvalidSession => 2,
             Self::Remote(error) => error.exit_code(),
+            Self::BothRunning { .. } => 3,
             _ => 1,
         }
     }
@@ -567,36 +575,49 @@ pub fn run_move(
         &start_script(&target.tmux, &request.session, &target_cwd, &resume),
     );
     if !output.success() {
-        let reason = if output.code == 41 {
-            "the resumed session exited right away; the source session was left running"
-        } else {
-            "starting the tmux session failed; the source session was left running"
+        let reason = match output.code {
+            41 if !output.timed_out => {
+                "the resumed session exited right away; the source session was left running"
+                    .to_string()
+            }
+            40 if !output.timed_out => {
+                "starting the tmux session failed; the source session was left running".to_string()
+            }
+            _ => format!(
+                "could not confirm the session started; the source session was left running, and {session} may already be running on {target} (check with: fleet ssh {target} {session})",
+                session = request.session,
+                target = target.name
+            ),
         };
-        return Err(step_error(&target, &output, reason));
+        return Err(step_error(&target, &output, &reason));
     }
 
     if request.keep {
         writeln!(out, "fleet: kept the source session on {}", source.name)?;
-    } else if let Some(reason) =
-        source_changed(&source, &record, &request.session, runner, agent_env)
-    {
-        writeln!(
-            out,
-            "fleet: warning: {reason}; both sessions are running, so end {} on {} yourself once you have checked it",
-            request.session, source.name
-        )?;
     } else {
+        let both_running = |reason: String| MoveError::BothRunning {
+            session: request.session.clone(),
+            source_host: source.name.clone(),
+            target: target.name.clone(),
+            reason,
+        };
+        if let Some(reason) = source_changed(&source, &record, &request.session, runner, agent_env)
+        {
+            return Err(both_running(reason));
+        }
         let output = runner.run(
             &source.endpoint,
             &stop_script(&source.tmux, &request.session),
         );
         if !output.success() {
-            writeln!(
-                out,
-                "fleet: warning: could not end {} on {}; end it yourself",
-                request.session, source.name
-            )?;
-        } else if source.is_local {
+            let detail = output.stderr.trim();
+            return Err(both_running(if detail.is_empty() {
+                "could not end the source session".to_string()
+            } else {
+                format!("could not end the source session: {detail}")
+            }));
+        }
+        if source.is_local {
             if let (Ok(dir), Some(id)) = (agent_env.state_dir(), record.session_id.as_deref()) {
                 let _ = clear_records(&dir, None, Some(id));
             }
