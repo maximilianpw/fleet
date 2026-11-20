@@ -8,6 +8,12 @@ export type PoolHistory = Record<string, PoolSample[]>;
 export type PoolPoint = QuotaStatsPoint;
 export type PoolMetric = 'remaining' | 'drain' | 'burn';
 
+export const POOL_REFRESH_MS = 5 * 60_000;
+
+export function poolQueryNow(now: number): number {
+  return Math.floor(now / POOL_REFRESH_MS) * POOL_REFRESH_MS;
+}
+
 /** Historical rate series derived only from management-provided quota samples.
  * Current metrics and remaining projections come directly from the pools endpoint. */
 export function consumptionRate(samples: PoolSample[], now: number, hours: number): number | null {

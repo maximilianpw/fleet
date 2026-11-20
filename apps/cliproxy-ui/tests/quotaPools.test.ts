@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { consumptionRate } from '../src/features/quota/poolModel';
+import { consumptionRate, poolQueryNow } from '../src/features/quota/poolModel';
 import { HOUR_MS } from '../src/features/quota/quotaTimelineModel';
 import { apiClient } from '../src/services/api/client';
 import { quotaStatsApi } from '../src/services/api/quotaStats';
@@ -110,5 +110,32 @@ describe('quota pool data contract', () => {
       hours: 337,
       nextDate: 30,
     });
+  });
+
+  test('pool queries move in five-minute steps and never ask for the future', () => {
+    const at = Date.UTC(2026, 9, 26, 12, 7, 30);
+    expect(poolQueryNow(at)).toBe(Date.UTC(2026, 9, 26, 12, 5));
+    expect(poolQueryNow(at + 60_000)).toBe(Date.UTC(2026, 9, 26, 12, 5));
+    expect(poolQueryNow(at + 3 * 60_000)).toBe(Date.UTC(2026, 9, 26, 12, 10));
+    for (const input of [at, at + 60_000, at + 3 * 60_000]) {
+      expect(poolQueryNow(input)).toBeLessThanOrEqual(input);
+    }
+  });
+
+  test('pools-only reads do not request history', async () => {
+    const requests: string[] = [];
+    const pool = { provider: 'claude', points: [] };
+    apiClient.get = (async (path) => {
+      requests.push(path);
+      return { pools: [pool] };
+    }) as typeof apiClient.get;
+    const pools = await quotaStatsApi.readPools({
+      from: now - HOUR_MS,
+      to: now,
+      rateHours: 3,
+      usageMultiplier: 1,
+    });
+    expect(pools).toEqual([pool as never]);
+    expect(requests).toEqual(['/observability/quota/pools']);
   });
 });

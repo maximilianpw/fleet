@@ -74,6 +74,7 @@ export function QuotaPage() {
   const connectionStatus = useAuthStore((state) => state.connectionStatus);
   const resolvedTheme: ResolvedTheme = useThemeStore((state) => state.resolvedTheme);
 
+  const [poolsRefresh, setPoolsRefresh] = useState(0);
   const [files, setFiles] = useState<AuthFileItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -339,6 +340,7 @@ export function QuotaPage() {
   // Refresh the complete pool in bounded batches, independent of the account page.
   const handleRefreshAll = useCallback(() => {
     if (disableControls) return;
+    setPoolsRefresh((value) => value + 1);
     setRefreshingAll(true);
     pendingRefreshRef.current = sessionGeneration;
     void loadFiles();
@@ -479,6 +481,7 @@ export function QuotaPage() {
           <QuotaPools
             entries={filteredEntries}
             quotaFor={getQuota}
+            refreshKey={poolsRefresh}
             displayNameFor={displayNameFor}
             now={ledgerNow}
             resolvedTheme={resolvedTheme}

@@ -9,6 +9,7 @@ import { HOUR_MS, DAY_MS } from '../quotaTimelineModel';
 import { useQuotaStats } from '../hooks/useQuotaStats';
 import {
   consumptionRate,
+  poolQueryNow,
   poolSpan,
   type PoolHistory,
   type PoolMetric,
@@ -24,6 +25,7 @@ const number = (value: number) => Math.round(value * 10) / 10;
 
 export interface QuotaPoolsProps {
   entries: QuotaFileEntry[];
+  refreshKey: number;
   quotaFor: (entry: QuotaFileEntry) => QuotaCardState | undefined;
   displayNameFor: (entry: QuotaFileEntry) => string;
   now: number;
@@ -41,17 +43,18 @@ export function QuotaPools(props: QuotaPoolsProps) {
   const span = useMemo(() => poolSpan(props.now, offset), [props.now, offset]);
   const providers = new Set(props.entries.map((entry) => entry.type));
   const providerFilter = providers.size === 1 ? props.entries[0].type : undefined;
+  const queryNow = poolQueryNow(props.now);
   const query = useMemo<QuotaStatsQuery>(
     () => ({
       provider: providerFilter,
-      from: Math.max(props.now - 31 * DAY_MS, Math.min(span.start, props.now - 6 * HOUR_MS)),
-      to: props.now,
+      from: Math.max(queryNow - 31 * DAY_MS, Math.min(span.start, queryNow - 6 * HOUR_MS)),
+      to: queryNow,
       rateHours: hours,
       usageMultiplier: future,
     }),
-    [providerFilter, span.start, props.now, hours, future]
+    [providerFilter, span.start, queryNow, hours, future]
   );
-  const stats = useQuotaStats(query, props.quotaFor);
+  const stats = useQuotaStats(query, props.refreshKey);
   const date = (at: number) =>
     new Date(at).toLocaleDateString(i18n.language, { month: 'short', day: 'numeric' });
   return (
@@ -300,8 +303,7 @@ function PoolCard({
   );
   const status = unavailable
     ? t('quota_management.pool_unavailable', {
-        defaultValue:
-          'Quota history unavailable. Accounts still shows live credential quotas.',
+        defaultValue: 'Quota history unavailable. Accounts still shows live credential quotas.',
       })
     : loading
       ? t('quota_management.pool_loading', { defaultValue: 'Loading quota history…' })
