@@ -10,7 +10,7 @@ import type { PluginListResponse } from '@/types';
 import {
   collectPluginResourceEntries,
   PLUGIN_RESOURCES_REFRESH_EVENT,
-  resolvePluginAssetURL,
+  resolvePluginPageURL,
 } from './pluginResources';
 import styles from './PluginResourcePage.module.scss';
 
@@ -85,7 +85,7 @@ export function PluginResourcePage() {
     return entries.find((entry) => entry.pluginID === pluginID && entry.menuIndex === menuIndex);
   }, [data?.plugins, menuIndex, pluginID]);
 
-  const iframeSrc = resource ? resolvePluginAssetURL(resource.menu.path, apiBase) : '';
+  const iframeSrc = resource ? resolvePluginPageURL(resource.menu.path, apiBase) : '';
 
   return (
     <div className={styles.page}>
@@ -112,12 +112,14 @@ export function PluginResourcePage() {
           />
         </div>
       ) : (
+        // No allow-same-origin: a same-origin plugin page could read the stored management key.
         <iframe
           className={styles.frame}
           src={iframeSrc}
+          sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads"
           title={resource.label}
           referrerPolicy="no-referrer"
-          allow="clipboard-read; clipboard-write"
+          allow="clipboard-write"
         />
       )}
     </div>

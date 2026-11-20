@@ -33,6 +33,14 @@ export const resolvePluginAssetURL = (value: string, apiBase: string) => {
   return base ? `${base}${trimmed}` : trimmed;
 };
 
+export const resolvePluginPageURL = (value: string, apiBase: string) => {
+  const trimmed = value.trim();
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (!trimmed.startsWith('/') || trimmed.startsWith('//')) return '';
+  const base = normalizeApiBase(apiBase);
+  return base ? `${base}${trimmed}` : trimmed;
+};
+
 // Registry entries usually carry an "owner/repo" slug rather than a full URL.
 export const buildRepositoryURL = (repository: string) => {
   const trimmed = repository.trim();
