@@ -55,7 +55,7 @@ export function DashboardPage() {
     () => ({ from: now - 24 * HOUR_MS, to: now, rateHours: 3, usageMultiplier: 1 }),
     [now]
   );
-  const quotaStats = useQuotaStats(quotaQuery, now);
+  const quotaStats = useQuotaStats(quotaQuery, now, { history: false });
 
   const quotaProviders = useMemo(() => {
     const present = new Set(classifyQuotaFiles(authFiles ?? []).map((entry) => entry.type));

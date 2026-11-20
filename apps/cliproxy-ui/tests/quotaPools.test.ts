@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { consumptionRate } from '../src/features/quota/poolModel';
+import { consumptionRate, poolQueryNow, type PoolSample } from '../src/features/quota/poolModel';
 import { HOUR_MS } from '../src/features/quota/quotaTimelineModel';
 import { apiClient } from '../src/services/api/client';
 import { quotaStatsApi } from '../src/services/api/quotaStats';
@@ -110,5 +110,88 @@ describe('quota pool data contract', () => {
       hours: 337,
       nextDate: 30,
     });
+  });
+
+  test('pool queries move in five-minute steps and never ask for the future', () => {
+    const at = Date.UTC(2026, 9, 26, 12, 7, 30);
+    expect(poolQueryNow(at)).toBe(Date.UTC(2026, 9, 26, 12, 5));
+    expect(poolQueryNow(at + 60_000)).toBe(Date.UTC(2026, 9, 26, 12, 5));
+    expect(poolQueryNow(at + 3 * 60_000)).toBe(Date.UTC(2026, 9, 26, 12, 10));
+    for (const input of [at, at + 60_000, at + 3 * 60_000]) {
+      expect(poolQueryNow(input)).toBeLessThanOrEqual(input);
+    }
+  });
+
+  test('pools-only reads do not request history', async () => {
+    const requests: string[] = [];
+    const pool = { provider: 'claude', points: [] };
+    apiClient.get = (async (path) => {
+      requests.push(path);
+      return { pools: [pool] };
+    }) as typeof apiClient.get;
+    const pools = await quotaStatsApi.readPools({
+      from: now - HOUR_MS,
+      to: now,
+      rateHours: 3,
+      usageMultiplier: 1,
+    });
+    expect(pools).toEqual([pool as never]);
+    expect(requests).toEqual(['/observability/quota/pools']);
+  });
+});
+
+describe('historical burn rate matches the quota service', () => {
+  const sample = (overrides: Partial<PoolSample> = {}): PoolSample => ({
+    at: now,
+    remaining: 50,
+    resetAt: now + 24 * HOUR_MS,
+    window: '7d',
+    ...overrides,
+  });
+
+  test('treats reset times a few seconds apart as the same window', () => {
+    const samples = [
+      sample({ at: now - HOUR_MS, remaining: 60, resetAt: now + HOUR_MS }),
+      sample({ remaining: 50, resetAt: now + HOUR_MS + 2_000 }),
+    ];
+    expect(consumptionRate(samples, now, 3)).toBe(10);
+  });
+
+  test('an unused window with a moving reset burns nothing', () => {
+    const samples = [
+      sample({ at: now - HOUR_MS, remaining: 100, resetAt: now - HOUR_MS + 168 * HOUR_MS }),
+      sample({ remaining: 100, resetAt: now + 168 * HOUR_MS }),
+    ];
+    expect(consumptionRate(samples, now, 3)).toBe(0);
+  });
+
+  test('skips a pair that straddles its reset', () => {
+    const samples = [
+      sample({ at: now - HOUR_MS, remaining: 60, resetAt: now - 1 }),
+      sample({ remaining: 50, resetAt: now - 1 }),
+    ];
+    expect(consumptionRate(samples, now, 3)).toBeNull();
+  });
+
+  test('ignores a pair from another window', () => {
+    const samples = [sample({ at: now - HOUR_MS, remaining: 60, window: '5h' }), sample()];
+    expect(consumptionRate(samples, now, 3)).toBeNull();
+  });
+
+  test('ignores consumption across a different reset', () => {
+    const samples = [
+      sample({ at: now - HOUR_MS, remaining: 60, resetAt: now + HOUR_MS }),
+      sample({ remaining: 50, resetAt: now + 10 * HOUR_MS }),
+    ];
+    expect(consumptionRate(samples, now, 3)).toBeNull();
+  });
+
+  test('samples after the instant are not the window reference', () => {
+    const samples = [
+      sample({ at: now - HOUR_MS, remaining: 60 }),
+      sample({ at: now, remaining: 50 }),
+      sample({ at: now + HOUR_MS, remaining: 40, window: '5h' }),
+    ];
+    expect(consumptionRate(samples, now, 3)).toBe(10);
   });
 });

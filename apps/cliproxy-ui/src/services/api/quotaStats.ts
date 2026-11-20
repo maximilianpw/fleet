@@ -50,18 +50,31 @@ export type QuotaStatsData = {
 };
 
 export const quotaStatsApi = {
-  async read(query: QuotaStatsQuery, signal?: AbortSignal): Promise<QuotaStatsData> {
+  async readPools(query: QuotaStatsQuery, signal?: AbortSignal): Promise<QuotaStatsPool[]> {
     const { rateHours, usageMultiplier, ...range } = query;
-    const [pools, history] = await Promise.all([
-      apiClient.get<{ pools: QuotaStatsPool[] }>('/observability/quota/pools', {
+    const response = await apiClient.get<{ pools: QuotaStatsPool[] }>(
+      '/observability/quota/pools',
+      {
         params: { ...range, rateHours, usageMultiplier },
         signal,
-      }),
+      }
+    );
+    return response.pools;
+  },
+  async read(query: QuotaStatsQuery, signal?: AbortSignal): Promise<QuotaStatsData> {
+    const range = {
+      provider: query.provider,
+      account: query.account,
+      from: query.from,
+      to: query.to,
+    };
+    const [pools, history] = await Promise.all([
+      quotaStatsApi.readPools(query, signal),
       apiClient.get<{ history: QuotaStatsData['history'] }>('/observability/quota/history', {
         params: range,
         signal,
       }),
     ]);
-    return { pools: pools.pools, history: history.history };
+    return { pools, history: history.history };
   },
 };

@@ -7,7 +7,12 @@ import {
 } from '@/services/api/quotaStats';
 
 /** Abort superseded reads and never show one connection's data in another. */
-export function useQuotaStats(query: QuotaStatsQuery, refreshKey: unknown) {
+export function useQuotaStats(
+  query: QuotaStatsQuery,
+  refreshKey: unknown,
+  options?: { history?: boolean }
+) {
+  const withHistory = options?.history ?? true;
   const generation = useQuotaStore((state) => state.cacheGeneration);
   const [result, setResult] = useState<{
     query: QuotaStatsQuery;
@@ -17,7 +22,13 @@ export function useQuotaStats(query: QuotaStatsQuery, refreshKey: unknown) {
   }>();
   useEffect(() => {
     const controller = new AbortController();
-    void quotaStatsApi.read(query, controller.signal).then(
+    void (
+      withHistory
+        ? quotaStatsApi.read(query, controller.signal)
+        : quotaStatsApi
+            .readPools(query, controller.signal)
+            .then((pools): QuotaStatsData => ({ pools, history: {} }))
+    ).then(
       (data) => {
         if (!controller.signal.aborted) setResult({ query, generation, data });
       },
@@ -31,6 +42,6 @@ export function useQuotaStats(query: QuotaStatsQuery, refreshKey: unknown) {
       }
     );
     return () => controller.abort();
-  }, [query, generation, refreshKey]);
-  return result?.query === query && result.generation === generation ? result : undefined;
+  }, [query, generation, refreshKey, withHistory]);
+  return result?.generation === generation ? result : undefined;
 }
