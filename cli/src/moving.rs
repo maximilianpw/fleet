@@ -331,6 +331,7 @@ fn agents_on(
 fn source_changed(
     source: &Side,
     record: &AgentRecord,
+    session: &str,
     runner: &Runner,
     agent_env: &AgentEnv,
 ) -> Option<String> {
@@ -339,6 +340,9 @@ fn source_changed(
         Err(error) => return Some(format!("could not re-check the source agent ({error})")),
     };
     match current {
+        Some(agent) if agent.tmux_session.as_deref() != Some(session) => Some(format!(
+            "the source agent's pane is no longer in session {session}"
+        )),
         Some(agent) if agent.updated_at != record.updated_at => {
             Some("the source agent reported activity after its transcript was copied".to_string())
         }
@@ -573,7 +577,9 @@ pub fn run_move(
 
     if request.keep {
         writeln!(out, "fleet: kept the source session on {}", source.name)?;
-    } else if let Some(reason) = source_changed(&source, &record, runner, agent_env) {
+    } else if let Some(reason) =
+        source_changed(&source, &record, &request.session, runner, agent_env)
+    {
         writeln!(
             out,
             "fleet: warning: {reason}; both sessions are running, so end {} on {} yourself once you have checked it",

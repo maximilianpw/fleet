@@ -25,9 +25,10 @@ are ignored.
 
 Inside tmux, a record is keyed by `$TMUX_PANE`, and Fleet asks tmux for the
 session name and the server's PID. tmux reuses pane ids after a server
-restart, so a record belongs to a pane only while both match. Outside tmux,
-the session id is the key. Text fields are stored on one line without control
-characters. Records live in
+restart, so a record belongs to a pane only while both match.
+Listings report the session the pane is in now, so a renamed session shows
+under its new name. Outside tmux, the session id is the key. Text fields are
+stored on one line without control characters. Records live in
 `$XDG_STATE_HOME/fleet/agents/` (default `~/.local/state/fleet/agents/`).
 
 `fleet hook` exits 0 on success and 1 on any error, including arguments the
@@ -117,8 +118,9 @@ Then it:
    move between hosts you trust;
 4. re-reads the source agent's state and ends SESSION on HOST, unless
    `--keep`. If the source agent reported again after its transcript was
-   copied, or is still running or waiting (a `--force` move), both sessions
-   are left running with a warning, so nothing typed there is lost.
+   copied, is still running or waiting (a `--force` move), or its pane is
+   no longer in SESSION, both sessions are left running with a warning, so
+   nothing typed there is lost.
 
 If any step fails, the source session keeps running.
 

@@ -11,7 +11,7 @@
 //! Hooks must never block the agent. `fleet hook` exits 0 on success and 1 on
 //! any error, never 2: Claude Code treats exit 2 from some hooks as "block".
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Read};
 use std::os::unix::fs::PermissionsExt;
@@ -543,8 +543,8 @@ fn remove(path: &Path) -> Result<(), AgentError> {
 /// Live tmux panes on this machine's default tmux server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaneSnapshot {
-    /// `(server PID, pane id)` pairs.
-    Live(BTreeSet<(u32, String)>),
+    /// `(server PID, pane id)` mapped to the pane's current session name.
+    Live(BTreeMap<(u32, String), String>),
     /// tmux is installed but no server is running: every pane is gone.
     NoServer,
     /// tmux could not be asked; keep reported states.
@@ -553,7 +553,12 @@ pub enum PaneSnapshot {
 
 pub fn tmux_panes() -> PaneSnapshot {
     let mut cmd = Command::new("tmux");
-    cmd.args(["list-panes", "-a", "-F", "#{pid} #{pane_id}"]);
+    cmd.args([
+        "list-panes",
+        "-a",
+        "-F",
+        "#{pid} #{pane_id} #{session_name}",
+    ]);
     match run_with_deadline(
         &mut cmd,
         TMUX_TIMEOUT,
@@ -564,8 +569,15 @@ pub fn tmux_panes() -> PaneSnapshot {
             String::from_utf8_lossy(&output.stdout)
                 .lines()
                 .filter_map(|line| {
-                    let (server, pane) = line.trim().split_once(' ')?;
-                    Some((server.parse().ok()?, pane.to_string()))
+                    let (server, rest) = line.trim().split_once(' ')?;
+                    let (pane, session) = rest.split_once(' ')?;
+                    if session.is_empty() {
+                        return None;
+                    }
+                    Some((
+                        (server.parse().ok()?, pane.to_string()),
+                        session.to_string(),
+                    ))
                 })
                 .collect(),
         ),
@@ -619,12 +631,18 @@ pub fn local_agents(
         let silent_for = now.saturating_sub(record.updated_at);
         if let Some(pane) = &record.tmux_pane {
             let alive = match panes {
-                PaneSnapshot::Live(live) => live.iter().any(|(server, id)| {
-                    id == pane
-                        && record
-                            .tmux_server
-                            .is_none_or(|recorded| recorded == *server)
-                }),
+                PaneSnapshot::Live(live) => {
+                    let found = live.iter().find(|((server, id), _)| {
+                        id == pane
+                            && record
+                                .tmux_server
+                                .is_none_or(|recorded| recorded == *server)
+                    });
+                    if let Some((_, session)) = found {
+                        record.tmux_session = Some(session.clone());
+                    }
+                    found.is_some()
+                }
                 PaneSnapshot::NoServer => false,
                 PaneSnapshot::Unknown => true,
             };
@@ -850,7 +868,11 @@ mod tests {
         detached.session_id = Some("outside-tmux".into());
         set_record(&dir, AgentState::Idle, detached, None, None, None, 1_000).unwrap();
 
-        let live = PaneSnapshot::Live([(7, "%1".to_string())].into_iter().collect());
+        let live = PaneSnapshot::Live(
+            [((7, "%1".to_string()), "main".to_string())]
+                .into_iter()
+                .collect(),
+        );
         let records = local_agents(&dir, &live, 2_000).unwrap();
         let states: Vec<_> = records.iter().map(|r| (r.key.as_str(), r.state)).collect();
         assert!(states.contains(&("pane-1", AgentState::Running)));
@@ -887,7 +909,11 @@ mod tests {
             1_000,
         )
         .unwrap();
-        let restarted = PaneSnapshot::Live([(8, "%1".to_string())].into_iter().collect());
+        let restarted = PaneSnapshot::Live(
+            [((8, "%1".to_string()), "main".to_string())]
+                .into_iter()
+                .collect(),
+        );
         let records = local_agents(&dir, &restarted, 2_000).unwrap();
         assert_eq!(records[0].state, AgentState::Gone);
 
@@ -903,6 +929,33 @@ mod tests {
         .unwrap();
         assert_eq!(fresh.task, None, "the old server's record is not inherited");
         assert_eq!(fresh.session_id, None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_renamed_session_is_reported_under_its_live_name() {
+        let dir = temp_dir("renamed");
+        set_record(
+            &dir,
+            AgentState::Idle,
+            HookFields {
+                session_id: Some("s1".into()),
+                ..HookFields::default()
+            },
+            Some("%1"),
+            Some("main".into()),
+            Some(7),
+            1_000,
+        )
+        .unwrap();
+        let live = PaneSnapshot::Live(
+            [((7, "%1".to_string()), "api".to_string())]
+                .into_iter()
+                .collect(),
+        );
+        let records = local_agents(&dir, &live, 2_000).unwrap();
+        assert_eq!(records[0].tmux_session.as_deref(), Some("api"));
+        assert_eq!(records[0].state, AgentState::Idle);
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -306,7 +306,7 @@ fn copy_recursive_passes_scp_r() {
 const PANE_TMUX: &str = r#"#!/bin/sh
 case "$1" in
   display-message) printf '4242 agents\n' ;;
-  list-panes) printf '4242 %%9\n' ;;
+  list-panes) printf '4242 %%9 agents\n' ;;
 esac
 exit 0
 "#;
@@ -551,6 +551,33 @@ fn move_keeps_both_sessions_when_the_source_agent_reported_again() {
     // plan 003 changes this exit code
     assert_eq!(code, 0, "{stdout}{stderr}");
     assert!(stdout.contains("reported activity"), "{stdout}");
+    let calls = fixture.ssh_calls();
+    assert!(
+        calls.contains(&"studio fleet-start".to_string()),
+        "{calls:?}"
+    );
+    assert!(
+        !calls.contains(&"workbox fleet-stop".to_string()),
+        "{calls:?}"
+    );
+}
+
+#[test]
+fn move_does_not_end_a_session_the_agent_pane_has_left() {
+    let fixture = move_fixture("done");
+    fixture.respond_nth(
+        "workbox",
+        "fleet-agents",
+        2,
+        &WORKBOX_AGENT.replace("needs-input", "done").replace(
+            "\"tmux_session\":\"agents\"",
+            "\"tmux_session\":\"renamed\"",
+        ),
+        0,
+    );
+    let (stdout, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stdout.contains("no longer in session agents"), "{stdout}");
     let calls = fixture.ssh_calls();
     assert!(
         calls.contains(&"studio fleet-start".to_string()),
