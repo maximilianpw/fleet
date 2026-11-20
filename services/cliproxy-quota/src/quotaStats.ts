@@ -127,7 +127,9 @@ export function pools(samples: readonly Sample[], now: number, hours: number, mu
 	}
 
 	return [...byProvider.entries()]
-		.map(([provider, accounts]): Pool => {
+		.map(([provider, all]): Pool => {
+			const active = all.filter((account) => account.at >= now - hours * HOUR_MS);
+			const accounts = active.length > 0 ? active : all;
 			accounts.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
 			const known = accounts.every((account) => account.burn !== null);
 			const burn = known ? accounts.reduce((total, account) => total + (account.burn ?? 0), 0) : null;
