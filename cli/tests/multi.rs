@@ -1006,3 +1006,74 @@ fn move_copies_the_transcript_even_with_a_custom_resume_command() {
         "{start}"
     );
 }
+
+fn assert_move_refused_before_target(fixture: &Fixture, needle: &str) {
+    let (stdout, stderr, code) = run_move(fixture, &["workbox", "agents", "studio"]);
+    assert_eq!(code, 1, "{stdout}{stderr}");
+    assert!(stderr.contains(needle), "{stderr}");
+    assert!(fixture
+        .ssh_calls()
+        .iter()
+        .all(|call| !call.starts_with("studio fleet-target-prep")));
+    assert!(fixture
+        .ssh_calls()
+        .iter()
+        .all(|call| !call.contains("fleet-transcript-write")));
+}
+
+#[test]
+fn move_refuses_a_source_that_reports_a_fact_twice() {
+    let fixture = move_fixture("done");
+    fixture.respond(
+        "workbox",
+        "fleet-git-source",
+        "top=/home/dev/src/app\nbranch=topic\nremote=origin\nupstream=feature/x\nhead=0123abcd\nurl=git@example.test:dev/app.git\nhome=/home/dev\ntop=/home/dev/elsewhere\n",
+        0,
+    );
+    assert_move_refused_before_target(&fixture, "reported top more than once");
+}
+
+#[test]
+fn move_refuses_a_checkout_path_with_dot_dot() {
+    let fixture = move_fixture("done");
+    fixture.respond(
+        "workbox",
+        "fleet-git-source",
+        "top=/home/dev/../../srv/app\nbranch=topic\nremote=origin\nupstream=feature/x\nhead=0123abcd\nurl=git@example.test:dev/app.git\nhome=/home/dev\n",
+        0,
+    );
+    assert_move_refused_before_target(&fixture, "not a plain absolute path");
+}
+
+#[test]
+fn move_refuses_a_working_directory_outside_the_checkout() {
+    let fixture = move_fixture("done");
+    fixture.respond(
+        "workbox",
+        "fleet-agents",
+        &WORKBOX_AGENT.replace("needs-input", "done").replace(
+            "\"cwd\":\"/home/dev/src/app\"",
+            "\"cwd\":\"/home/dev/other\"",
+        ),
+        0,
+    );
+    assert_move_refused_before_target(&fixture, "is not inside the checkout");
+}
+
+#[test]
+fn move_refuses_a_transcript_path_with_dot_dot() {
+    let fixture = move_fixture("done");
+    fixture.respond(
+        "workbox",
+        "fleet-agents",
+        &WORKBOX_AGENT
+            .replace("needs-input", "done")
+            .replace("\"agent\":\"claude\"", "\"agent\":\"codex\"")
+            .replace(
+                "/home/dev/.claude/projects/-home-dev-src-app/abc.jsonl",
+                "/home/dev/.codex/../.ssh/authorized_keys",
+            ),
+        0,
+    );
+    assert_move_refused_before_target(&fixture, "not a plain absolute path");
+}

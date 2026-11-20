@@ -127,7 +127,7 @@ impl Sandbox {
     fn source_facts(&self, source: &Path, bare: &Path) -> SourceRepo {
         let (code, stdout) = self.run_script(&source_repo_script(source.to_str().unwrap()));
         assert_eq!(code, 0, "{stdout}");
-        let facts = parse_key_values(&stdout);
+        let facts = parse_key_values(&stdout).unwrap();
         SourceRepo {
             top: facts["top"].clone(),
             branch: facts["branch"].clone(),
@@ -183,7 +183,7 @@ fn source_script_reports_facts_for_a_clean_pushed_branch() {
     let (_, source) = sandbox.seed();
     let (code, stdout) = sandbox.run_script(&source_repo_script(source.to_str().unwrap()));
     assert_eq!(code, 0, "{stdout}");
-    let facts = parse_key_values(&stdout);
+    let facts = parse_key_values(&stdout).unwrap();
     assert_eq!(facts["branch"], "topic");
     assert_eq!(facts["remote"], "origin");
     assert_eq!(facts["upstream"], "feature/x");

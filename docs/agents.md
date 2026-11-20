@@ -97,7 +97,8 @@ Fleet refuses, and changes nothing, unless:
 - that agent is done or idle (`--force` overrides only this check);
 - its checkout is a clean git branch whose HEAD equals its upstream, and the
   upstream is on a remote;
-- the checkout is under HOST's home directory.
+- the checkout is under HOST's home directory, the agent's working directory
+  is inside it, and none of the reported paths contain `.` or `..` components.
 
 Then it:
 

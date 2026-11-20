@@ -160,12 +160,23 @@ fn source_failure(code: i32) -> &'static str {
     }
 }
 
-pub fn parse_key_values(stdout: &str) -> BTreeMap<String, String> {
-    stdout
-        .lines()
-        .filter_map(|line| line.split_once('='))
-        .map(|(key, value)| (key.trim().to_string(), value.to_string()))
-        .collect()
+pub fn parse_key_values(stdout: &str) -> Result<BTreeMap<String, String>, String> {
+    let mut facts = BTreeMap::new();
+    for (key, value) in stdout.lines().filter_map(|line| line.split_once('=')) {
+        let key = key.trim().to_string();
+        if facts.insert(key.clone(), value.to_string()).is_some() {
+            return Err(key);
+        }
+    }
+    Ok(facts)
+}
+
+fn is_plain_absolute_path(path: &str) -> bool {
+    path.starts_with('/')
+        && path
+            .split('/')
+            .skip(1)
+            .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
 pub fn target_home_script() -> String {
@@ -423,6 +434,22 @@ pub fn run_move(
     {
         validate_script_value(value)?;
     }
+    if !is_plain_absolute_path(&cwd) {
+        return Err(MoveError::Step {
+            host: source.name.clone(),
+            reason: format!("the agent's working directory is not a plain absolute path: {cwd}"),
+        });
+    }
+    if let Some(transcript) = record
+        .transcript
+        .as_deref()
+        .filter(|transcript| !is_plain_absolute_path(transcript))
+    {
+        return Err(MoveError::Step {
+            host: source.name.clone(),
+            reason: format!("the transcript path is not a plain absolute path: {transcript}"),
+        });
+    }
     writeln!(
         out,
         "fleet: moving {} ({}) from {} to {}",
@@ -433,7 +460,10 @@ pub fn run_move(
     if !output.success() {
         return Err(step_error(&source, &output, source_failure(output.code)));
     }
-    let facts = parse_key_values(&output.stdout);
+    let facts = parse_key_values(&output.stdout).map_err(|key| MoveError::Step {
+        host: source.name.clone(),
+        reason: format!("the source checkout reported {key} more than once"),
+    })?;
     let fact = |key: &str| facts.get(key).cloned().unwrap_or_default();
     let repo = SourceRepo {
         top: fact("top"),
@@ -463,6 +493,16 @@ pub fn run_move(
     for value in reported {
         validate_script_value(value)?;
     }
+    for value in [&repo.top, &repo.home] {
+        if !is_plain_absolute_path(value) {
+            return Err(MoveError::Step {
+                host: source.name.clone(),
+                reason: format!(
+                    "the source checkout reported a path that is not a plain absolute path: {value}"
+                ),
+            });
+        }
+    }
     // These become git arguments on the target, where a leading `-` would be
     // read as an option.
     let option_like = [&repo.branch, &repo.remote, &repo.upstream, &repo.url]
@@ -486,10 +526,19 @@ pub fn run_move(
 
     let output = runner.run(&target.endpoint, &target_home_script());
     let target_home = parse_key_values(&output.stdout)
-        .remove("home")
+        .ok()
+        .and_then(|mut facts| facts.remove("home"))
         .filter(|home| output.success() && !home.is_empty())
         .ok_or_else(|| step_error(&target, &output, "cannot read the home directory"))?;
     validate_script_value(&target_home)?;
+    if !is_plain_absolute_path(&target_home) {
+        return Err(MoveError::Step {
+            host: target.name.clone(),
+            reason: format!(
+                "reported a home directory that is not a plain absolute path: {target_home}"
+            ),
+        });
+    }
     let target_top =
         rehome(&repo.top, &repo.home, &target_home).ok_or_else(|| MoveError::Step {
             host: source.name.clone(),
@@ -498,7 +547,19 @@ pub fn run_move(
                 repo.top, target.name
             ),
         })?;
-    let target_cwd = rehome(&cwd, &repo.home, &target_home).unwrap_or_else(|| target_top.clone());
+    let cwd_in_checkout = match cwd.strip_prefix(repo.top.as_str()) {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => rest,
+        _ => {
+            return Err(MoveError::Step {
+                host: source.name.clone(),
+                reason: format!(
+                    "the agent's working directory {cwd} is not inside the checkout {}",
+                    repo.top
+                ),
+            })
+        }
+    };
+    let target_cwd = format!("{target_top}{cwd_in_checkout}");
 
     writeln!(
         out,
@@ -743,8 +804,32 @@ mod tests {
 
     #[test]
     fn key_values_parse() {
-        let facts = parse_key_values("top=/a\nbranch=main\nurl=git@x:y=z\nnoise\n");
+        let facts = parse_key_values("top=/a\nbranch=main\nurl=git@x:y=z\nnoise\n").unwrap();
         assert_eq!(facts["url"], "git@x:y=z");
         assert_eq!(facts.len(), 3);
+    }
+
+    #[test]
+    fn a_repeated_key_is_rejected() {
+        assert_eq!(
+            parse_key_values("top=/a\nurl=x\ntop=/b\n"),
+            Err("top".to_string())
+        );
+    }
+
+    #[test]
+    fn plain_absolute_paths() {
+        assert!(is_plain_absolute_path("/home/dev/src/app"));
+        for path in [
+            "/home/dev/../etc",
+            "/home/dev/./x",
+            "/home/dev//x",
+            "/home/dev/x/",
+            "relative/path",
+            "/",
+            "",
+        ] {
+            assert!(!is_plain_absolute_path(path), "{path}");
+        }
     }
 }
