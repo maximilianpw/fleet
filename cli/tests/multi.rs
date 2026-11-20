@@ -271,7 +271,7 @@ fn ports_lists_listeners_from_ss() {
     fixture.respond(
         "workbox",
         "fleet-ports",
-        "@ss\nLISTEN 0 4096 127.0.0.1:5173 0.0.0.0:* users:((\"node\",pid=812,fd=21))\n",
+        "@ss\nLISTEN 0 4096 127.0.0.1:5173 0.0.0.0:* users:((\"node\",pid=812,fd=21))\n@end\n",
         0,
     );
     let output = fixture
@@ -284,6 +284,48 @@ fn ports_lists_listeners_from_ss() {
     assert!(stdout.contains("5173    127.0.0.1"), "{stdout}");
     assert!(stdout.contains("node (812)"));
     assert!(stdout.contains("fleet forward workbox 5173 5173"));
+}
+
+#[test]
+fn ports_fails_when_the_listing_was_cut_off() {
+    let fixture = Fixture::new();
+    fixture.write_xdg_config(MINIMAL_TOML);
+    fixture.respond(
+        "workbox",
+        "fleet-ports",
+        "@ss\nLISTEN 0 4096 127.0.0.1:5173 0.0.0.0:* users:((\"node\",pid=812,fd=21))\n",
+        255,
+    );
+    let output = fixture
+        .fleet_scripted()
+        .args(["ports", "dev"])
+        .output()
+        .unwrap();
+    let (stdout, stderr, code) = Fixture::output_text(&output);
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("could not list ports on workbox"),
+        "{stderr}"
+    );
+    assert!(!stdout.contains("5173"), "{stdout}");
+}
+
+#[test]
+fn ports_reports_an_empty_listing_from_lsof_as_success() {
+    let fixture = Fixture::new();
+    fixture.write_xdg_config(MINIMAL_TOML);
+    fixture.respond("workbox", "fleet-ports", "@lsof\n@end\n", 1);
+    let output = fixture
+        .fleet_scripted()
+        .args(["ports", "dev"])
+        .output()
+        .unwrap();
+    let (stdout, stderr, code) = Fixture::output_text(&output);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("No listening TCP ports reported on workbox."),
+        "{stdout}"
+    );
 }
 
 #[test]
@@ -1101,7 +1143,7 @@ fn doctor_strips_control_characters_from_a_remote_version() {
 }
 
 const ESCAPED_PORTS_REPLY: &str =
-    "@ss\nLISTEN 0 4096 127.0.0.1:5173 0.0.0.0:* users:((\"no\u{1b}[2Jde\",pid=812,fd=21))\n";
+    "@ss\nLISTEN 0 4096 127.0.0.1:5173 0.0.0.0:* users:((\"no\u{1b}[2Jde\",pid=812,fd=21))\n@end\n";
 
 #[test]
 fn ports_strips_control_characters_from_process_names_but_json_keeps_them() {
