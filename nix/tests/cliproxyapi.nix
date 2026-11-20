@@ -106,6 +106,14 @@ pkgs.testers.runNixOSTest {
         assert len(credentials) == 1, credentials
         account = credentials[0]["auth_index"]
         assert credentials[0]["name"] == "codex.json", credentials
+        for prop, want in [
+            ("CapabilityBoundingSet", ""),
+            ("PrivateDevices", "yes"),
+            ("ProtectKernelTunables", "yes"),
+            ("RestrictNamespaces", "yes"),
+        ]:
+            got = machine.succeed(f"systemctl show -P {prop} cliproxyapi").strip()
+            assert got == want, f"{prop}: {got!r}"
         # The backend atomically canonicalizes Codex JSON and tightens its mode;
         # preserve every data field and the path, not formatting or the inode.
         assert json.loads(machine.succeed("cat /home/alice/.cli-proxy-api/codex.json")) == original

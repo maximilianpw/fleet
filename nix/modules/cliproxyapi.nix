@@ -113,11 +113,26 @@ in {
           Restart = "always";
           RestartSec = 5;
           UMask = "0077";
+          CapabilityBoundingSet = "";
+          LockPersonality = true;
           NoNewPrivileges = true;
+          PrivateDevices = true;
           PrivateTmp = true;
-          ProtectSystem = "strict";
+          ProtectClock = true;
+          ProtectControlGroups = true;
           ProtectHome = "read-only";
+          ProtectHostname = true;
+          ProtectKernelLogs = true;
+          ProtectKernelModules = true;
+          ProtectKernelTunables = true;
+          ProtectProc = "invisible";
+          ProtectSystem = "strict";
           ReadWritePaths = [cfg.credentialDirectory];
+          RestrictAddressFamilies = ["AF_INET" "AF_INET6" "AF_UNIX"];
+          RestrictNamespaces = true;
+          RestrictRealtime = true;
+          RestrictSUIDSGID = true;
+          SystemCallArchitectures = "native";
         };
       };
     }
