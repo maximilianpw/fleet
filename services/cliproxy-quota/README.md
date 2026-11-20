@@ -65,8 +65,9 @@ Parameters, response shapes and status codes follow CLIProxyAPI's
 `docs/quota-statistics.md`: `from`/`to` in epoch milliseconds (default the
 last 24 hours, at most 31 days), `provider`, `account`, `rateHours` 1/3/6 and
 `usageMultiplier` 0/0.5/1/2. Each account contributes its longest recognized
-window (7d over 5h). Accounts are identified by their CLIProxyAPI
-`auth_index`, read from `GET /v8/management/credentials`.
+window (7d over 5h). A pool counts only accounts with a sample inside the last
+`rateHours`; if none has one, it reports them all. Accounts are identified by their
+CLIProxyAPI `auth_index`, read from `GET /v8/management/credentials`.
 
 Requests forward their `Authorization` header to that management endpoint,
 so the management key is checked by CLIProxyAPI itself and its 401, 403 or

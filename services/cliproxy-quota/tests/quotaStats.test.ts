@@ -35,6 +35,54 @@ describe("quota statistics model", () => {
 		expect(pool?.projection.refills[0]).toEqual({ at: now + 24 * HOUR_MS, value: 100 });
 	});
 
+	test("an account with no sample inside the rate window is left out of the pool", () => {
+		const [pool] = pools(
+			[
+				sample({ account: "1", at: now - HOUR_MS, remaining: 80 }),
+				sample({ account: "1", at: now, remaining: 68 }),
+				sample({ account: "2", at: now - 30 * HOUR_MS, remaining: 40 }),
+				sample({ account: "2", at: now - 29 * HOUR_MS, remaining: 35 }),
+			],
+			now,
+			3,
+			1,
+		);
+		expect(pool).toMatchObject({ accountCount: 1, capacity: 100, remaining: 68, burn: 12, drain: 12 });
+		expect(pool?.accounts.map((account) => account.name)).toEqual(["codex:1"]);
+		expect(pool?.projection.available).toBe(true);
+		expect(pool?.points.at(-1)).toEqual({ at: now, value: 68 });
+	});
+
+	test("a provider whose accounts are all silent is still reported", () => {
+		const result = pools(
+			[
+				sample({ account: "2", at: now - 30 * HOUR_MS, remaining: 40 }),
+				sample({ account: "2", at: now - 29 * HOUR_MS, remaining: 35 }),
+			],
+			now,
+			3,
+			1,
+		);
+		expect(result).toHaveLength(1);
+		expect(result[0]).toMatchObject({ accountCount: 1, remaining: 35, burn: null });
+		expect(result[0]?.projection.available).toBe(false);
+	});
+
+	test("an account silent for exactly the rate window still counts", () => {
+		const [pool] = pools(
+			[
+				sample({ account: "1", at: now - HOUR_MS, remaining: 80 }),
+				sample({ account: "1", at: now, remaining: 68 }),
+				sample({ account: "2", at: now - 4 * HOUR_MS, remaining: 40 }),
+				sample({ account: "2", at: now - 3 * HOUR_MS, remaining: 35 }),
+			],
+			now,
+			3,
+			1,
+		);
+		expect(pool?.accountCount).toBe(2);
+	});
+
 	test("rates skip refills, reset crossings and window changes, and need five minutes of evidence", () => {
 		expect(rate([sample({ at: now - 4 * 60_000, remaining: 60 }), sample({ remaining: 50 })], now, 3)).toBeNull();
 		expect(rate([sample({ at: now - HOUR_MS, remaining: 10 }), sample({ remaining: 90 })], now, 3)).toBeNull();
