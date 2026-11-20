@@ -12,6 +12,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -20,6 +21,7 @@ use thiserror::Error;
 const SIGTERM: i32 = 15;
 const SIGKILL: i32 = 9;
 const TIMEOUT_EXIT: i32 = 124;
+const OUTPUT_GRACE: Duration = Duration::from_secs(1);
 
 extern "C" {
     fn kill(pid: i32, sig: i32) -> i32;
@@ -273,8 +275,9 @@ pub(crate) fn run_with_deadline(
 }
 
 /// [`run_with_deadline`] for a shell script whose children may outlive it.
-/// The child leads a new process group, and timeouts signal the whole group,
-/// so a grandchild holding stdout open cannot stall the caller.
+/// The child leads a new process group. After a timeout the whole group is
+/// killed and output is awaited for at most one more second, so a grandchild
+/// holding stdout open cannot stall the caller.
 pub(crate) fn run_group_with_deadline(
     cmd: &mut Command,
     timeout: Duration,
@@ -331,10 +334,20 @@ fn run_bounded<S>(
     };
     if finish == Finish::TimedOut(None) {
         kill_and_reap(&mut child, group);
+    } else if group && matches!(finish, Finish::TimedOut(_)) {
+        send_group_signal(child.id(), SIGKILL);
     }
 
-    let stdout = stdout.join().unwrap_or_default();
-    let mut stderr = stderr.join().unwrap_or_default();
+    let (stdout, mut stderr) = match finish {
+        Finish::Exited(_) => (
+            stdout.recv().unwrap_or_default(),
+            stderr.recv().unwrap_or_default(),
+        ),
+        Finish::TimedOut(_) => (
+            stdout.recv_timeout(OUTPUT_GRACE).unwrap_or_default(),
+            stderr.recv_timeout(OUTPUT_GRACE).unwrap_or_default(),
+        ),
+    };
     Ok(Ok(match finish {
         Finish::Exited(status) => BoundedOutput {
             timed_out: false,
@@ -431,13 +444,15 @@ fn kill_and_reap(child: &mut Child, group: bool) {
 fn drain(
     pipe: Option<impl Read + Send + 'static>,
     name: &str,
-) -> io::Result<thread::JoinHandle<Vec<u8>>> {
+) -> io::Result<mpsc::Receiver<Vec<u8>>> {
     let mut pipe = pipe.ok_or_else(|| io::Error::other(format!("missing {name} pipe")))?;
-    Ok(thread::spawn(move || {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = pipe.read_to_end(&mut buf);
-        buf
-    }))
+        let _ = sender.send(buf);
+    });
+    Ok(receiver)
 }
 
 /// Signal one positive PID. PIDs that do not fit a positive `pid_t` are
@@ -491,4 +506,48 @@ pub(crate) fn program_is_runnable(program: &OsStr) -> bool {
 fn is_executable_file(path: &Path) -> bool {
     path.metadata()
         .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_script(script: &str, timeout: Duration) -> (BoundedOutput, Duration) {
+        let started = Instant::now();
+        let output = run_group_with_deadline(
+            Command::new("sh").args(["-c", script]),
+            timeout,
+            Duration::from_millis(200),
+            Duration::from_millis(10),
+        )
+        .expect("script runs");
+        (output, started.elapsed())
+    }
+
+    #[test]
+    fn a_descendant_that_ignores_term_cannot_outlive_the_deadline() {
+        let (output, elapsed) = run_script(
+            r#"sh -c 'trap "" TERM; sleep 30' & wait"#,
+            Duration::from_millis(200),
+        );
+        assert!(elapsed < Duration::from_secs(5), "took {elapsed:?}");
+        assert!(output.timed_out);
+        assert_eq!(output.code, TIMEOUT_EXIT);
+    }
+
+    #[test]
+    fn output_before_a_timeout_is_kept() {
+        let (output, _) = run_script("echo started; sleep 30", Duration::from_millis(200));
+        assert!(output.timed_out);
+        assert_eq!(output.stdout, b"started\n");
+    }
+
+    #[test]
+    fn a_normal_exit_returns_all_output() {
+        let (output, _) = run_script("printf a; printf b >&2", Duration::from_secs(5));
+        assert!(!output.timed_out);
+        assert_eq!(output.code, 0);
+        assert_eq!(output.stdout, b"a");
+        assert_eq!(output.stderr, b"b");
+    }
 }

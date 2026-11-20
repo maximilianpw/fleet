@@ -16,6 +16,7 @@ use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -207,8 +208,18 @@ impl Runner {
             }
             thread::sleep(QUERY_POLL);
         }
-        let producer_err = producer_err.join().unwrap_or_default();
-        let consumer_err = consumer_err.join().unwrap_or_default();
+        let (producer_err, consumer_err) = if timed_out {
+            let grace = Duration::from_secs(1);
+            (
+                producer_err.recv_timeout(grace).unwrap_or_default(),
+                consumer_err.recv_timeout(grace).unwrap_or_default(),
+            )
+        } else {
+            (
+                producer_err.recv().unwrap_or_default(),
+                consumer_err.recv().unwrap_or_default(),
+            )
+        };
         if timed_out {
             return Err(RemoteError::Transfer("timed out".into()));
         }
@@ -257,15 +268,17 @@ impl Runner {
     }
 }
 
-fn drain_stderr(child: &mut std::process::Child) -> thread::JoinHandle<String> {
+fn drain_stderr(child: &mut std::process::Child) -> mpsc::Receiver<String> {
     let pipe = child.stderr.take();
+    let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         let mut text = String::new();
         if let Some(mut pipe) = pipe {
             let _ = io::Read::read_to_string(&mut pipe, &mut text);
         }
-        text
-    })
+        let _ = sender.send(text);
+    });
+    receiver
 }
 
 fn program_name(endpoint: &Endpoint) -> &'static str {
