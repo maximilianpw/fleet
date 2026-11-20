@@ -64,6 +64,13 @@ Leave `services.cliproxyapi-quota` enabled with its **same** credentialDirectory
 Its `/quota/v1/{claude,codex,xai}` endpoint is independent and unchanged. The
 backend and this read-only sidecar intentionally share the existing auth files.
 
+The backend unit runs sandboxed: no capabilities, no device access, a
+read-only view of the system and of home directories apart from its state
+directory and `credentialDirectory`, and no new namespaces. A plugin that
+needs more than that will fail to start under this module; relax the unit
+in the consumer configuration with `systemd.services.cliproxyapi.serviceConfig`
+rather than editing the module.
+
 ## Runtime secrets and initialization
 
 Use the consumer's existing encrypted secret mechanism. Two root-readable,
