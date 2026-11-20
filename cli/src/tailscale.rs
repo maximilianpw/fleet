@@ -196,7 +196,9 @@ fn short_time(raw: &str) -> String {
 }
 
 /// Match a host by `tailscale_name`, else by canonical name, `ssh_target`,
-/// or `display_target` against the peer's HostName or MagicDNS name.
+/// or `display_target` against the peer's HostName or MagicDNS name. When several
+/// peers match: without `tailscale_name` an online peer wins, with it a MagicDNS
+/// match wins.
 fn find_peer<'a>(config: &FleetConfig, name: &str, status: &'a Status) -> Option<&'a Peer> {
     let host = config.hosts.get(name)?;
     let candidates: Vec<String> = match &host.tailscale_name {
@@ -212,15 +214,36 @@ fn find_peer<'a>(config: &FleetConfig, name: &str, status: &'a Status) -> Option
             names
         }
     };
-    status.peer.values().find(|peer| {
-        let dns = peer.dns_name.trim_end_matches('.').to_ascii_lowercase();
-        let dns_short = dns.split('.').next().unwrap_or_default().to_string();
-        let host_name = peer.host_name.to_ascii_lowercase();
-        candidates.iter().any(|candidate| {
-            !candidate.is_empty()
-                && (*candidate == host_name || *candidate == dns || *candidate == dns_short)
+    let pinned = host.tailscale_name.is_some();
+    status
+        .peer
+        .values()
+        .filter_map(|peer| {
+            let dns = peer.dns_name.trim_end_matches('.').to_ascii_lowercase();
+            let dns_short = dns.split('.').next().unwrap_or_default().to_string();
+            let host_name = peer.host_name.to_ascii_lowercase();
+            let usable = |candidate: &&String| !candidate.is_empty();
+            let dns_match = candidates
+                .iter()
+                .filter(usable)
+                .any(|candidate| *candidate == dns || *candidate == dns_short);
+            let host_match = candidates
+                .iter()
+                .filter(usable)
+                .any(|candidate| *candidate == host_name);
+            if !dns_match && !host_match {
+                return None;
+            }
+            let key = if pinned {
+                (dns_match, peer.online)
+            } else {
+                (peer.online, dns_match)
+            };
+            Some((key, peer))
         })
-    })
+        .rev()
+        .max_by_key(|(key, _)| *key)
+        .map(|(_, peer)| peer)
 }
 
 #[cfg(test)]
@@ -345,5 +368,66 @@ long_running_agents = false
     fn tolerates_garbage() {
         assert!(parse_status("not json").is_none());
         assert!(parse_status("{}").unwrap().peer.is_empty());
+    }
+
+    const STALE: &str = r#""nodekey:a": {"HostName":"workbox","DNSName":"workbox.tail0000.ts.net.","Online":false,"LastSeen":"2026-10-01T08:30:00Z"}"#;
+    const LIVE: &str = r#""nodekey:z": {"HostName":"workbox","DNSName":"workbox-1.tail0000.ts.net.","Online":true,"Active":true,"CurAddr":"192.0.2.9:41641"}"#;
+
+    fn status_with(peers: &[&str]) -> Status {
+        parse_status(&format!(r#"{{"Peer": {{{}}}}}"#, peers.join(","))).unwrap()
+    }
+
+    fn pinned_toml(name: &str) -> String {
+        TOML.replacen(
+            "[hosts.workbox]\n",
+            &format!("[hosts.workbox]\ntailscale_name = \"{name}\"\n"),
+            1,
+        )
+    }
+
+    #[test]
+    fn a_stale_offline_node_does_not_hide_the_live_one() {
+        let config = parse_config(TOML).unwrap();
+        let status = status_with(&[STALE, LIVE]);
+        let presence = presence_for(&config, Some(&status));
+        assert_eq!(
+            presence["workbox"],
+            Presence::Online {
+                path: NetPath::Direct
+            }
+        );
+    }
+
+    #[test]
+    fn an_explicit_tailscale_name_pins_the_dns_named_node() {
+        let status = status_with(&[STALE, LIVE]);
+        let live = parse_config(&pinned_toml("workbox-1")).unwrap();
+        assert_eq!(
+            presence_for(&live, Some(&status))["workbox"],
+            Presence::Online {
+                path: NetPath::Direct
+            }
+        );
+        let stale = parse_config(&pinned_toml("workbox")).unwrap();
+        assert!(matches!(
+            presence_for(&stale, Some(&status))["workbox"],
+            Presence::Offline { .. }
+        ));
+    }
+
+    #[test]
+    fn equal_matches_keep_node_key_order() {
+        let config = parse_config(TOML).unwrap();
+        let status = status_with(&[
+            r#""nodekey:a": {"HostName":"workbox","DNSName":"one.tail0000.ts.net.","Online":true,"Active":true,"CurAddr":"","Relay":"fra"}"#,
+            r#""nodekey:b": {"HostName":"workbox","DNSName":"two.tail0000.ts.net.","Online":true,"Active":true,"CurAddr":"","Relay":"ams"}"#,
+        ]);
+        let presence = presence_for(&config, Some(&status));
+        assert_eq!(
+            presence["workbox"],
+            Presence::Online {
+                path: NetPath::Relay("fra".into())
+            }
+        );
     }
 }

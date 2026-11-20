@@ -76,7 +76,9 @@ names another executable or session.
 shell, run, and ad-hoc forward, copy requires declared host metadata; an
 unknown `HOST:PATH` endpoint is rejected before `scp` starts.
 
-`tailscale_name` is the peer's Tailscale HostName or MagicDNS name. It only
+`tailscale_name` is the peer's Tailscale HostName or MagicDNS name. If the
+tailnet lists more than one node for a machine, Fleet prefers the online one;
+set `tailscale_name` to a node's MagicDNS name to pin that node. It only
 affects presence in `fleet status` and `--where online`. Fleet still connects
 through `ssh_target`.
 
