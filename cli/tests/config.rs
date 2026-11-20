@@ -377,6 +377,26 @@ label = \"org.nix-community.home.fleet-tunnel-5173\"
 }
 
 #[test]
+fn a_mapping_must_spell_out_remote_host_and_label() {
+    for missing in ["remote_host", "label"] {
+        let mapping: String = [
+            "host = \"dev\"",
+            "local_port = 5173",
+            "remote_port = 5173",
+            "remote_host = \"localhost\"",
+            "label = \"org.nix-community.home.fleet-tunnel-5173\"",
+        ]
+        .into_iter()
+        .filter(|line| !line.starts_with(missing))
+        .collect::<Vec<_>>()
+        .join("\n");
+        let toml = format!("{MINIMAL_TOML}\n[[tunnels.mappings]]\n{mapping}\n");
+        let error = parse_config(&toml).unwrap_err().to_string();
+        assert!(error.contains(missing), "{missing}: {error}");
+    }
+}
+
+#[test]
 fn mapping_alias_of_current_host_is_rejected() {
     let toml = r#"
 schema_version = 1

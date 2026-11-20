@@ -97,8 +97,13 @@ A mapping is:
 | `host` | Remote canonical name or alias. Never the current host. |
 | `local_port` | `1..65535`, unique among mappings. |
 | `remote_port` | `1..65535`. |
-| `remote_host` | DNS or IPv4-ish name. Default `localhost`. IPv6 literals are out of scope. |
-| `label` | launchd identifier. Home Manager defaults to `org.nix-community.home.fleet-tunnel-PORT`. |
+| `remote_host` | DNS or IPv4-ish name, usually `localhost`. Required in TOML. IPv6 literals are out of scope. |
+| `label` | launchd identifier. Required in TOML. |
+
+All five fields are required in a hand-written file. The Home Manager module
+fills in `remote_host = "localhost"` and
+`label = "org.nix-community.home.fleet-tunnel-PORT"` when they are omitted
+from `programs.fleet.settings`.
 
 Plist paths come from the runtime `HOME`, not a path baked into the package.
 Labels use a restricted identifier syntax. Renaming a label is a behavioral
