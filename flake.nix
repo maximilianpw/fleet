@@ -413,6 +413,7 @@
             pkgs.clippy
             pkgs.rustfmt
             pkgs.alejandra
+            pkgs.bun
             pkgs.openssh
             pkgs.tmux
             pkgs.lsof

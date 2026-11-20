@@ -31,13 +31,18 @@ Fleet's own licensing stays unset; there is no root LICENSE file.
 
 ## Commands
 
-From the repo root. Done means exit 0.
+From the repo root, inside `nix develop` (it provides Rust 1.95.0, a linker,
+fish, and bun). Done means exit 0.
 
 ```sh
 cargo fmt --all --check
 cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
+RUSTFLAGS="-D warnings" FLEET_REQUIRE_FISH=1 FLEET_REQUIRE_GIT=1 cargo test --locked --all-targets
 ```
+
+That test line is what CI runs. Without `FLEET_REQUIRE_FISH`, the fish
+quoting tests skip when fish is missing, and without `FLEET_REQUIRE_GIT`, the
+tests that run real git skip when git is missing.
 
 Nix, on Linux:
 
@@ -54,6 +59,10 @@ nix build path:$PWD#cliproxy-ui path:$PWD#checks.x86_64-linux.cliproxy-ui --no-l
 
 Or `bun install --frozen-lockfile && bun run verify` in `apps/cliproxy-ui`.
 
+After changing `apps/cliproxy-ui/bun.lock`, set both hashes in
+`nix/packages/cliproxy-ui.nix` to `lib.fakeHash` and rebuild to get the new
+values. The `--os`/`--cpu` overrides let both be computed on Linux.
+
 Quota service (the `-nixos` check boots a VM and needs KVM):
 
 ```sh
@@ -64,9 +73,9 @@ Or `bun install --frozen-lockfile && bun run check` in
 `services/cliproxy-quota`. Its tests never contact provider APIs; inject
 `fetch` and use temporary credential directories. Keep the
 `/quota/v1/{claude,codex,xai}` contract in its README stable.
-After changing `bun.lock`, set both hashes in `nix/packages/cliproxy-ui.nix`
-to `lib.fakeHash` and rebuild to get the new values. The `--os`/`--cpu`
-overrides let both be computed on Linux.
+After changing `services/cliproxy-quota/bun.lock`, set the one hash in
+`nix/packages/cliproxy-quota.nix` to `lib.fakeHash` and rebuild to get the
+new value.
 
 Customized proxy backend and ClickHouse integration, on Linux:
 
@@ -107,6 +116,7 @@ launchctl, and publishing are separate approvals.
 - `nix/packages/cliproxy-quota.nix`: `cliproxy-quota-server`, `cliproxyapi-util`
 - `nix/modules/cliproxy-quota.nix`: `nixosModules.cliproxy-quota`, unit `cliproxyapi-quota`
 - `nix/tests/cliproxy-quota.nix`: NixOS VM test for that module
+- `nix/tests/cliproxyapi.nix`: NixOS VM test for the backend with ClickHouse
 - `nix/modules/home-manager.nix`: `programs.fleet.enable`, `.package`, snake_case `.settings`
 - `.github/workflows/check.yml`: Linux and macOS Cargo; UI verify; Nix checks
 
