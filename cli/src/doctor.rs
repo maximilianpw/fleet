@@ -15,6 +15,7 @@ use thiserror::Error;
 use crate::config::{is_managed_remote_host, Supervisor};
 use crate::launchd::Launchctl;
 use crate::process::run_with_deadline;
+use crate::remote::{printable, printable_lines};
 use crate::tunnels::{
     self, has_managed_tunnels, inspect, mappings_for_host, require_launchctl, ListenProbe,
     ListenerOwnership, Mapping, SupervisorState, TunnelContext, NO_TUNNELS_CONFIGURED,
@@ -291,10 +292,10 @@ impl DoctorEvent {
                 None => "tmux: unknown".into(),
             },
             Self::Fleet { version } => match version {
-                Some(version) => format!("fleet: {version}"),
+                Some(version) => format!("fleet: {}", printable(version)),
                 None => "fleet: missing".into(),
             },
-            Self::Warning { text } => format!("warning: {text}"),
+            Self::Warning { text } => format!("warning: {}", printable_lines(text)),
         }
     }
 

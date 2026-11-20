@@ -1077,3 +1077,88 @@ fn move_refuses_a_transcript_path_with_dot_dot() {
     );
     assert_move_refused_before_target(&fixture, "not a plain absolute path");
 }
+
+#[test]
+fn doctor_strips_control_characters_from_a_remote_version() {
+    let fixture = three_host_fixture();
+    let reply = probe("[]").replace(
+        &format!("fleet {}", env!("CARGO_PKG_VERSION")),
+        &format!("fleet {}\u{1b}]0;owned\u{7}", env!("CARGO_PKG_VERSION")),
+    );
+    fixture.respond("workbox", "fleet-probe", &reply, 0);
+    let output = fixture
+        .fleet_scripted()
+        .args(["doctor", "workbox"])
+        .output()
+        .unwrap();
+    let (stdout, stderr, code) = Fixture::output_text(&output);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("fleet: "), "{stdout}");
+    assert!(
+        !stdout.contains('\u{1b}') && !stdout.contains('\u{7}'),
+        "{stdout:?}"
+    );
+}
+
+const ESCAPED_PORTS_REPLY: &str =
+    "@ss\nLISTEN 0 4096 127.0.0.1:5173 0.0.0.0:* users:((\"no\u{1b}[2Jde\",pid=812,fd=21))\n";
+
+#[test]
+fn ports_strips_control_characters_from_process_names_but_json_keeps_them() {
+    let fixture = Fixture::new();
+    fixture.write_xdg_config(MINIMAL_TOML);
+    fixture.respond("workbox", "fleet-ports", ESCAPED_PORTS_REPLY, 0);
+    let output = fixture
+        .fleet_scripted()
+        .args(["ports", "workbox"])
+        .output()
+        .unwrap();
+    let (stdout, stderr, code) = Fixture::output_text(&output);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("no?[2Jde"), "{stdout:?}");
+    assert!(!stdout.contains('\u{1b}'), "{stdout:?}");
+
+    let output = fixture
+        .fleet_scripted()
+        .args(["ports", "workbox", "--json"])
+        .output()
+        .unwrap();
+    let (stdout, stderr, code) = Fixture::output_text(&output);
+    assert_eq!(code, 0, "{stderr}");
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert!(parsed.to_string().contains("no\\u001b[2Jde"), "{stdout}");
+}
+
+#[test]
+fn move_strips_control_characters_from_remote_errors() {
+    let fixture = move_fixture("done");
+    fixture.respond("studio", "fleet-target-prep", "", 28);
+    fs::write(
+        fixture.responses().join("studio.fleet-target-prep.err"),
+        "fatal: \u{1b}[2Jgone\n",
+    )
+    .unwrap();
+    let (_, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("git clone failed"), "{stderr}");
+    assert!(stderr.contains("fatal: ?[2Jgone"), "{stderr:?}");
+    assert!(!stderr.contains('\u{1b}'), "{stderr:?}");
+}
+
+#[test]
+fn unsafe_values_are_shown_escaped() {
+    let fixture = move_fixture("done");
+    fixture.respond(
+        "workbox",
+        "fleet-git-source",
+        "top=/home/dev/src/app\nbranch=topic\nremote=origin\nupstream=feature/x\nhead=0123abcd\nurl=git@example.test:\u{1b}[2J.git\nhome=/home/dev\n",
+        0,
+    );
+    let (_, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
+    assert_eq!(code, 2, "{stderr:?}");
+    assert!(
+        stderr.contains("cannot be sent to a remote shell"),
+        "{stderr:?}"
+    );
+    assert!(!stderr.contains('\u{1b}'), "{stderr:?}");
+}

@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 
 use serde::Serialize;
 
-use crate::remote::REMOTE_PATH_SETUP;
+use crate::remote::{printable, REMOTE_PATH_SETUP};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct ListeningPort {
@@ -106,12 +106,18 @@ pub fn render_ports(host: &str, ports: &[ListeningPort]) -> String {
     let mut seen = BTreeSet::new();
     for port in ports {
         let process = match (&port.process, port.pid) {
-            (Some(name), Some(pid)) => format!("{name} ({pid})"),
-            (Some(name), None) => name.clone(),
+            (Some(name), Some(pid)) => format!("{} ({pid})", printable(name)),
+            (Some(name), None) => printable(name),
             (None, Some(pid)) => format!("pid {pid}"),
             (None, None) => "-".into(),
         };
-        let _ = writeln!(out, "{:<7} {:<24} {}", port.port, port.address, process);
+        let _ = writeln!(
+            out,
+            "{:<7} {:<24} {}",
+            port.port,
+            printable(&port.address),
+            process
+        );
         seen.insert(port.port);
     }
     if let Some(first) = seen.iter().next() {

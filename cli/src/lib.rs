@@ -504,11 +504,11 @@ pub fn run_ports_command(
         let reason = if output.success() {
             "neither ss nor lsof is available".to_string()
         } else {
-            let detail = output.stderr.trim();
+            let detail = remote::printable_lines(output.stderr.trim());
             if detail.is_empty() {
                 format!("query exited {}", output.code)
             } else {
-                detail.to_string()
+                detail
             }
         };
         return Err(remote::RemoteError::Transfer(format!(

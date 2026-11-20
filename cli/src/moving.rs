@@ -23,8 +23,8 @@ use crate::agents::{
 };
 use crate::config::{is_safe_session_name, FleetConfig, DEFAULT_TMUX_COMMAND};
 use crate::remote::{
-    sh_quote, validate_script_value, Endpoint, QueryOutput, RemoteError, Runner, REMOTE_PATH_SETUP,
-    TRANSFER_TIMEOUT,
+    printable, printable_lines, sh_quote, validate_script_value, Endpoint, QueryOutput,
+    RemoteError, Runner, REMOTE_PATH_SETUP, TRANSFER_TIMEOUT,
 };
 
 #[derive(Debug, Error)]
@@ -294,7 +294,7 @@ pub fn rehome(path: &str, from_home: &str, to_home: &str) -> Option<String> {
 }
 
 fn step_error(side: &Side, output: &QueryOutput, reason: &str) -> MoveError {
-    let detail = output.stderr.trim();
+    let detail = printable_lines(output.stderr.trim());
     let reason = if output.timed_out {
         format!("{reason} (timed out)")
     } else if detail.is_empty() {
@@ -337,7 +337,7 @@ fn agents_on(
             reason: if output.code == 127 {
                 "fleet is not on the remote PATH".into()
             } else {
-                output.stderr.trim().to_string()
+                printable_lines(output.stderr.trim())
             },
         });
     }
@@ -420,8 +420,8 @@ pub fn run_move(
             state: record.state.label().to_string(),
         });
     }
-    let resume =
-        resume_command(&record).ok_or_else(|| MoveError::NoResumeCommand(record.agent.clone()))?;
+    let resume = resume_command(&record)
+        .ok_or_else(|| MoveError::NoResumeCommand(printable(&record.agent)))?;
     let cwd = record.cwd.clone().ok_or(MoveError::MissingField("cwd"))?;
     // A recorded resume command replaces only how the agent restarts; any
     // known transcript still has to reach the target.
@@ -437,7 +437,10 @@ pub fn run_move(
     if !is_plain_absolute_path(&cwd) {
         return Err(MoveError::Step {
             host: source.name.clone(),
-            reason: format!("the agent's working directory is not a plain absolute path: {cwd}"),
+            reason: format!(
+                "the agent's working directory is not a plain absolute path: {}",
+                printable(&cwd)
+            ),
         });
     }
     if let Some(transcript) = record
@@ -447,13 +450,19 @@ pub fn run_move(
     {
         return Err(MoveError::Step {
             host: source.name.clone(),
-            reason: format!("the transcript path is not a plain absolute path: {transcript}"),
+            reason: format!(
+                "the transcript path is not a plain absolute path: {}",
+                printable(transcript)
+            ),
         });
     }
     writeln!(
         out,
         "fleet: moving {} ({}) from {} to {}",
-        request.session, record.agent, source.name, target.name
+        request.session,
+        printable(&record.agent),
+        source.name,
+        target.name
     )?;
 
     let output = runner.run(&source.endpoint, &source_repo_script(&cwd));
@@ -462,7 +471,10 @@ pub fn run_move(
     }
     let facts = parse_key_values(&output.stdout).map_err(|key| MoveError::Step {
         host: source.name.clone(),
-        reason: format!("the source checkout reported {key} more than once"),
+        reason: format!(
+            "the source checkout reported {} more than once",
+            printable(&key)
+        ),
     })?;
     let fact = |key: &str| facts.get(key).cloned().unwrap_or_default();
     let repo = SourceRepo {
@@ -498,7 +510,8 @@ pub fn run_move(
             return Err(MoveError::Step {
                 host: source.name.clone(),
                 reason: format!(
-                    "the source checkout reported a path that is not a plain absolute path: {value}"
+                    "the source checkout reported a path that is not a plain absolute path: {}",
+                    printable(value)
                 ),
             });
         }
@@ -511,7 +524,10 @@ pub fn run_move(
     if let Some(value) = option_like {
         return Err(MoveError::Step {
             host: source.name.clone(),
-            reason: format!("the source checkout reported an option-like git value: {value}"),
+            reason: format!(
+                "the source checkout reported an option-like git value: {}",
+                printable(value)
+            ),
         });
     }
     if !repo.head.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -519,7 +535,7 @@ pub fn run_move(
             host: source.name.clone(),
             reason: format!(
                 "the source checkout reported an invalid commit: {}",
-                repo.head
+                printable(&repo.head)
             ),
         });
     }
@@ -535,7 +551,8 @@ pub fn run_move(
         return Err(MoveError::Step {
             host: target.name.clone(),
             reason: format!(
-                "reported a home directory that is not a plain absolute path: {target_home}"
+                "reported a home directory that is not a plain absolute path: {}",
+                printable(&target_home)
             ),
         });
     }
@@ -544,7 +561,8 @@ pub fn run_move(
             host: source.name.clone(),
             reason: format!(
                 "the checkout {} is outside the home directory, so its place on {} is unknown",
-                repo.top, target.name
+                printable(&repo.top),
+                target.name
             ),
         })?;
     let cwd_in_checkout = match cwd.strip_prefix(repo.top.as_str()) {
@@ -553,8 +571,9 @@ pub fn run_move(
             return Err(MoveError::Step {
                 host: source.name.clone(),
                 reason: format!(
-                    "the agent's working directory {cwd} is not inside the checkout {}",
-                    repo.top
+                    "the agent's working directory {} is not inside the checkout {}",
+                    printable(&cwd),
+                    printable(&repo.top)
                 ),
             })
         }
@@ -580,7 +599,10 @@ pub fn run_move(
             target_transcript_path(&record, transcript, &repo.home, &target_home, &target_cwd)
                 .ok_or_else(|| MoveError::Step {
                     host: source.name.clone(),
-                    reason: format!("the transcript {transcript} is outside the home directory"),
+                    reason: format!(
+                        "the transcript {} is outside the home directory",
+                        printable(transcript)
+                    ),
                 })?;
         let dest_dir = destination
             .rsplit_once('/')
@@ -674,7 +696,7 @@ pub fn run_move(
             &stop_script(&source.tmux, &request.session),
         );
         if !output.success() {
-            let detail = output.stderr.trim();
+            let detail = printable_lines(output.stderr.trim());
             return Err(both_running(if detail.is_empty() {
                 "could not end the source session".to_string()
             } else {
