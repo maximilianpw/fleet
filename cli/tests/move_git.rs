@@ -303,10 +303,9 @@ fn target_prep_refuses_a_diverged_target_branch() {
     let repo = sandbox.source_facts(&source, &bare);
     let (code, stdout) = sandbox.prep(&repo);
     assert_eq!(code, 30, "{stdout}");
-    // plan 004 changes this
     assert_eq!(
         sandbox.git(&target, &["symbolic-ref", "--short", "HEAD"]),
-        "topic"
+        "main"
     );
 }
 
@@ -321,9 +320,50 @@ fn target_prep_refuses_when_the_commit_is_missing() {
     repo.head = "0123456789abcdef0123456789abcdef01234567".to_string();
     let (code, stdout) = sandbox.prep(&repo);
     assert_eq!(code, 31, "{stdout}");
-    // plan 004 changes this
     assert_eq!(
         sandbox.git(&sandbox.target_dir(), &["symbolic-ref", "--short", "HEAD"]),
-        "topic"
+        "main"
+    );
+}
+
+#[test]
+fn target_prep_leaves_the_branch_alone_when_the_upstream_lacks_the_commit() {
+    if !git_available() {
+        return;
+    }
+    let sandbox = Sandbox::new("unpushed-head");
+    let (bare, source) = sandbox.seed();
+    let target = sandbox.clone_target(&bare);
+    let mut repo = sandbox.source_facts(&source, &bare);
+    sandbox.commit(&source, "unpushed");
+    repo.head = sandbox.git(&source, &["rev-parse", "HEAD"]);
+    let (code, stdout) = sandbox.prep(&repo);
+    assert_eq!(code, 31, "{stdout}");
+    assert_eq!(
+        sandbox.git(&target, &["symbolic-ref", "--short", "HEAD"]),
+        "main"
+    );
+}
+
+#[test]
+fn target_prep_accepts_a_target_branch_that_is_ahead_of_the_upstream() {
+    if !git_available() {
+        return;
+    }
+    let sandbox = Sandbox::new("ahead");
+    let (bare, source) = sandbox.seed();
+    let target = sandbox.clone_target(&bare);
+    sandbox.git(
+        &target,
+        &["checkout", "--quiet", "-b", "topic", "origin/feature/x"],
+    );
+    sandbox.commit(&target, "local-only");
+    sandbox.git(&target, &["checkout", "--quiet", "main"]);
+    let repo = sandbox.source_facts(&source, &bare);
+    let (code, stdout) = sandbox.prep(&repo);
+    assert_eq!(code, 0, "{stdout}");
+    sandbox.git(
+        &target,
+        &["merge-base", "--is-ancestor", &repo.head, "HEAD"],
     );
 }

@@ -191,7 +191,10 @@ mkdir -p {parent} || exit 27; \
 git clone --quiet -o {remote} -- {url} {dir} || exit 28; \
 cd {dir} || exit 24; \
 fi; \
-if git rev-parse -q --verify refs/heads/{branch} >/dev/null; then git checkout --quiet {branch} || exit 29; \
+git merge-base --is-ancestor {head} {tracking} || exit 31; \
+if git rev-parse -q --verify refs/heads/{branch} >/dev/null; then \
+git merge-base --is-ancestor refs/heads/{branch} {tracking} || git merge-base --is-ancestor {tracking} refs/heads/{branch} || exit 30; \
+git checkout --quiet {branch} || exit 29; \
 else git checkout --quiet -b {branch} --track {tracking} || exit 29; fi; \
 git merge --ff-only --quiet {tracking} || exit 30; \
 git merge-base --is-ancestor {head} HEAD || exit 31; \
@@ -724,6 +727,9 @@ mod tests {
         assert!(prep.contains("'/home/dev/Local/it'\"'\"'s'"));
         assert!(prep.contains("--track 'origin/feature/x'"), "{prep}");
         assert!(prep.contains("--is-ancestor '0123abcd' HEAD"), "{prep}");
+        let first_ancestry = prep.find("--is-ancestor").unwrap();
+        let first_checkout = prep.find("git checkout").unwrap();
+        assert!(first_ancestry < first_checkout, "{prep}");
         for script in [
             prep,
             source_repo_script("/Users/dev/app"),

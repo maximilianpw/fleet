@@ -106,7 +106,10 @@ Then it:
    fetches, checks out the branch, and fast-forwards only to the upstream
    branch, which may be named differently from the local one. The branch must
    then contain the commit HOST is on. Checking out the branch switches that
-   checkout for anything else working in it on TARGET;
+   checkout for anything else working in it on TARGET. Fleet verifies the
+   fast-forward and the commit before switching, so a refused move leaves an
+   existing checkout on its branch. A checkout that Fleet cloned for a move
+   that is then refused stays on TARGET;
 2. copies the transcript from HOST to TARGET through this machine. It is
    written beside its final path and moved into place only after both the
    read and the write succeeded, so a failed copy never replaces a transcript;
