@@ -271,7 +271,7 @@ fn ports_lists_listeners_from_ss() {
     fixture.respond(
         "workbox",
         "fleet-ports",
-        "@ss\nLISTEN 0 4096 127.0.0.1:5173 0.0.0.0:* users:((\"node\",pid=812,fd=21))\n",
+        "@ss\nLISTEN 0 4096 127.0.0.1:5173 0.0.0.0:* users:((\"node\",pid=812,fd=21))\n@end\n",
         0,
     );
     let output = fixture
@@ -284,6 +284,48 @@ fn ports_lists_listeners_from_ss() {
     assert!(stdout.contains("5173    127.0.0.1"), "{stdout}");
     assert!(stdout.contains("node (812)"));
     assert!(stdout.contains("fleet forward workbox 5173 5173"));
+}
+
+#[test]
+fn ports_fails_when_the_listing_was_cut_off() {
+    let fixture = Fixture::new();
+    fixture.write_xdg_config(MINIMAL_TOML);
+    fixture.respond(
+        "workbox",
+        "fleet-ports",
+        "@ss\nLISTEN 0 4096 127.0.0.1:5173 0.0.0.0:* users:((\"node\",pid=812,fd=21))\n",
+        255,
+    );
+    let output = fixture
+        .fleet_scripted()
+        .args(["ports", "dev"])
+        .output()
+        .unwrap();
+    let (stdout, stderr, code) = Fixture::output_text(&output);
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("could not list ports on workbox"),
+        "{stderr}"
+    );
+    assert!(!stdout.contains("5173"), "{stdout}");
+}
+
+#[test]
+fn ports_reports_an_empty_listing_from_lsof_as_success() {
+    let fixture = Fixture::new();
+    fixture.write_xdg_config(MINIMAL_TOML);
+    fixture.respond("workbox", "fleet-ports", "@lsof\n@end\n", 1);
+    let output = fixture
+        .fleet_scripted()
+        .args(["ports", "dev"])
+        .output()
+        .unwrap();
+    let (stdout, stderr, code) = Fixture::output_text(&output);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("No listening TCP ports reported on workbox."),
+        "{stdout}"
+    );
 }
 
 #[test]
@@ -306,7 +348,7 @@ fn copy_recursive_passes_scp_r() {
 const PANE_TMUX: &str = r#"#!/bin/sh
 case "$1" in
   display-message) printf '4242 agents\n' ;;
-  list-panes) printf '4242 %%9\n' ;;
+  list-panes) printf '4242 %%9 agents\n' ;;
 esac
 exit 0
 "#;
@@ -548,9 +590,37 @@ fn move_keeps_both_sessions_when_the_source_agent_reported_again() {
         0,
     );
     let (stdout, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
-    // plan 003 changes this exit code
-    assert_eq!(code, 0, "{stdout}{stderr}");
-    assert!(stdout.contains("reported activity"), "{stdout}");
+    assert_eq!(code, 3, "{stdout}{stderr}");
+    assert!(stderr.contains("reported activity"), "{stderr}");
+    assert!(!stdout.contains("fleet: moved"), "{stdout}");
+    let calls = fixture.ssh_calls();
+    assert!(
+        calls.contains(&"studio fleet-start".to_string()),
+        "{calls:?}"
+    );
+    assert!(
+        !calls.contains(&"workbox fleet-stop".to_string()),
+        "{calls:?}"
+    );
+}
+
+#[test]
+fn move_does_not_end_a_session_the_agent_pane_has_left() {
+    let fixture = move_fixture("done");
+    fixture.respond_nth(
+        "workbox",
+        "fleet-agents",
+        2,
+        &WORKBOX_AGENT.replace("needs-input", "done").replace(
+            "\"tmux_session\":\"agents\"",
+            "\"tmux_session\":\"renamed\"",
+        ),
+        0,
+    );
+    let (stdout, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
+    assert_eq!(code, 3, "{stdout}{stderr}");
+    assert!(stderr.contains("no longer in session agents"), "{stderr}");
+    assert!(!stdout.contains("fleet: moved"), "{stdout}");
     let calls = fixture.ssh_calls();
     assert!(
         calls.contains(&"studio fleet-start".to_string()),
@@ -567,12 +637,39 @@ fn move_reports_when_stopping_the_source_fails() {
     let fixture = move_fixture("done");
     fixture.respond("workbox", "fleet-stop", "", 1);
     let (stdout, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
-    // plan 003 changes this exit code
-    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert_eq!(code, 3, "{stdout}{stderr}");
     assert!(
-        stdout.contains("could not end agents on workbox"),
-        "{stdout}"
+        stderr.contains("could not end the source session"),
+        "{stderr}"
     );
+    assert!(!stdout.contains("fleet: moved"), "{stdout}");
+}
+
+#[test]
+fn move_says_the_target_may_be_running_when_the_start_is_cut_off() {
+    let fixture = move_fixture("done");
+    fixture.respond("studio", "fleet-start", "", 255);
+    let (stdout, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
+    assert_eq!(code, 1, "{stdout}{stderr}");
+    assert!(
+        stderr.contains("may already be running on studio"),
+        "{stderr}"
+    );
+    assert!(!fixture
+        .ssh_calls()
+        .contains(&"workbox fleet-stop".to_string()));
+}
+
+#[test]
+fn move_keep_exits_zero_and_leaves_the_source_running() {
+    let fixture = move_fixture("done");
+    let (stdout, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio", "--keep"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stdout.contains("kept the source session"), "{stdout}");
+    assert!(stdout.contains("fleet: moved"), "{stdout}");
+    assert!(!fixture
+        .ssh_calls()
+        .contains(&"workbox fleet-stop".to_string()));
 }
 
 #[test]
@@ -761,9 +858,9 @@ fn move_does_not_end_a_source_agent_that_is_still_busy() {
         .output()
         .unwrap();
     let (stdout, stderr, code) = Fixture::output_text(&output);
-    assert_eq!(code, 0, "{stdout}{stderr}");
-    assert!(stdout.contains("both sessions are running"), "{stdout}");
-    assert!(stdout.contains("is still"), "{stdout}");
+    assert_eq!(code, 3, "{stdout}{stderr}");
+    assert!(stderr.contains("is still"), "{stderr}");
+    assert!(!stdout.contains("fleet: moved"), "{stdout}");
     assert!(!stdout.contains("reported activity"), "{stdout}");
     assert!(fixture
         .ssh_calls()
@@ -950,4 +1047,160 @@ fn move_copies_the_transcript_even_with_a_custom_resume_command() {
         start.contains("claude --resume abc --model opus"),
         "{start}"
     );
+}
+
+fn assert_move_refused_before_target(fixture: &Fixture, needle: &str) {
+    let (stdout, stderr, code) = run_move(fixture, &["workbox", "agents", "studio"]);
+    assert_eq!(code, 1, "{stdout}{stderr}");
+    assert!(stderr.contains(needle), "{stderr}");
+    assert!(fixture
+        .ssh_calls()
+        .iter()
+        .all(|call| !call.starts_with("studio fleet-target-prep")));
+    assert!(fixture
+        .ssh_calls()
+        .iter()
+        .all(|call| !call.contains("fleet-transcript-write")));
+}
+
+#[test]
+fn move_refuses_a_source_that_reports_a_fact_twice() {
+    let fixture = move_fixture("done");
+    fixture.respond(
+        "workbox",
+        "fleet-git-source",
+        "top=/home/dev/src/app\nbranch=topic\nremote=origin\nupstream=feature/x\nhead=0123abcd\nurl=git@example.test:dev/app.git\nhome=/home/dev\ntop=/home/dev/elsewhere\n",
+        0,
+    );
+    assert_move_refused_before_target(&fixture, "reported top more than once");
+}
+
+#[test]
+fn move_refuses_a_checkout_path_with_dot_dot() {
+    let fixture = move_fixture("done");
+    fixture.respond(
+        "workbox",
+        "fleet-git-source",
+        "top=/home/dev/../../srv/app\nbranch=topic\nremote=origin\nupstream=feature/x\nhead=0123abcd\nurl=git@example.test:dev/app.git\nhome=/home/dev\n",
+        0,
+    );
+    assert_move_refused_before_target(&fixture, "not a plain absolute path");
+}
+
+#[test]
+fn move_refuses_a_working_directory_outside_the_checkout() {
+    let fixture = move_fixture("done");
+    fixture.respond(
+        "workbox",
+        "fleet-agents",
+        &WORKBOX_AGENT.replace("needs-input", "done").replace(
+            "\"cwd\":\"/home/dev/src/app\"",
+            "\"cwd\":\"/home/dev/other\"",
+        ),
+        0,
+    );
+    assert_move_refused_before_target(&fixture, "is not inside the checkout");
+}
+
+#[test]
+fn move_refuses_a_transcript_path_with_dot_dot() {
+    let fixture = move_fixture("done");
+    fixture.respond(
+        "workbox",
+        "fleet-agents",
+        &WORKBOX_AGENT
+            .replace("needs-input", "done")
+            .replace("\"agent\":\"claude\"", "\"agent\":\"codex\"")
+            .replace(
+                "/home/dev/.claude/projects/-home-dev-src-app/abc.jsonl",
+                "/home/dev/.codex/../.ssh/authorized_keys",
+            ),
+        0,
+    );
+    assert_move_refused_before_target(&fixture, "not a plain absolute path");
+}
+
+#[test]
+fn doctor_strips_control_characters_from_a_remote_version() {
+    let fixture = three_host_fixture();
+    let reply = probe("[]").replace(
+        &format!("fleet {}", env!("CARGO_PKG_VERSION")),
+        &format!("fleet {}\u{1b}]0;owned\u{7}", env!("CARGO_PKG_VERSION")),
+    );
+    fixture.respond("workbox", "fleet-probe", &reply, 0);
+    let output = fixture
+        .fleet_scripted()
+        .args(["doctor", "workbox"])
+        .output()
+        .unwrap();
+    let (stdout, stderr, code) = Fixture::output_text(&output);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("fleet: "), "{stdout}");
+    assert!(
+        !stdout.contains('\u{1b}') && !stdout.contains('\u{7}'),
+        "{stdout:?}"
+    );
+}
+
+const ESCAPED_PORTS_REPLY: &str =
+    "@ss\nLISTEN 0 4096 127.0.0.1:5173 0.0.0.0:* users:((\"no\u{1b}[2Jde\",pid=812,fd=21))\n@end\n";
+
+#[test]
+fn ports_strips_control_characters_from_process_names_but_json_keeps_them() {
+    let fixture = Fixture::new();
+    fixture.write_xdg_config(MINIMAL_TOML);
+    fixture.respond("workbox", "fleet-ports", ESCAPED_PORTS_REPLY, 0);
+    let output = fixture
+        .fleet_scripted()
+        .args(["ports", "workbox"])
+        .output()
+        .unwrap();
+    let (stdout, stderr, code) = Fixture::output_text(&output);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("no?[2Jde"), "{stdout:?}");
+    assert!(!stdout.contains('\u{1b}'), "{stdout:?}");
+
+    let output = fixture
+        .fleet_scripted()
+        .args(["ports", "workbox", "--json"])
+        .output()
+        .unwrap();
+    let (stdout, stderr, code) = Fixture::output_text(&output);
+    assert_eq!(code, 0, "{stderr}");
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert!(parsed.to_string().contains("no\\u001b[2Jde"), "{stdout}");
+}
+
+#[test]
+fn move_strips_control_characters_from_remote_errors() {
+    let fixture = move_fixture("done");
+    fixture.respond("studio", "fleet-target-prep", "", 28);
+    fs::write(
+        fixture.responses().join("studio.fleet-target-prep.err"),
+        "fatal: \u{1b}[2Jgone\n",
+    )
+    .unwrap();
+    let (_, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("git clone failed"), "{stderr}");
+    assert!(stderr.contains("fatal: ?[2Jgone"), "{stderr:?}");
+    assert!(!stderr.contains('\u{1b}'), "{stderr:?}");
+}
+
+#[test]
+fn unsafe_values_are_shown_escaped() {
+    let fixture = move_fixture("done");
+    fixture.respond(
+        "workbox",
+        "fleet-git-source",
+        "top=/home/dev/src/app\nbranch=topic\nremote=origin\nupstream=feature/x\nhead=0123abcd\nurl=git@example.test:\u{1b}[2J.git\nhome=/home/dev\n",
+        0,
+    );
+    let (_, stderr, code) = run_move(&fixture, &["workbox", "agents", "studio"]);
+    assert_eq!(code, 2, "{stderr:?}");
+    assert!(
+        stderr.contains("cannot be sent to a remote shell"),
+        "{stderr:?}"
+    );
+    assert!(!stderr.contains('\u{1b}'), "{stderr:?}");
 }

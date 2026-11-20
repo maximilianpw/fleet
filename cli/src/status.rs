@@ -17,7 +17,7 @@ use crate::agents::{
 use crate::config::{FleetConfig, ResolvedHost, DEFAULT_TMUX_COMMAND};
 use crate::doctor::{classify_ssh_stderr, DoctorEvent, SshState};
 use crate::process::run_with_deadline;
-use crate::remote::{fan_out, Endpoint, QueryOutput, Runner, REMOTE_PATH_SETUP};
+use crate::remote::{fan_out, printable, Endpoint, QueryOutput, Runner, REMOTE_PATH_SETUP};
 use crate::tailscale::Presence;
 
 pub const FLEET_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -343,14 +343,6 @@ pub fn doctor_tool_events(resolved: &ResolvedHost, runner: &Runner) -> Vec<Docto
         FleetPresence::Unknown => {}
     }
     events
-}
-
-/// Text reported by a host, made safe to print: session names, agent names,
-/// and versions arrive over SSH and could carry terminal escape sequences.
-fn printable(text: &str) -> String {
-    text.chars()
-        .map(|c| if c.is_control() { '?' } else { c })
-        .collect()
 }
 
 fn agent_summary(snapshot: &HostSnapshot) -> String {

@@ -500,22 +500,29 @@ pub fn run_ports_command(
         }
     };
     let output = remote::Runner::new(env).run(&endpoint, &ports::ports_script());
-    let Some(list) = ports::parse_ports(&output.stdout) else {
-        let reason = if output.success() {
-            "neither ss nor lsof is available".to_string()
-        } else {
-            let detail = output.stderr.trim();
-            if detail.is_empty() {
-                format!("query exited {}", output.code)
+    let list = match ports::parse_ports(&output.stdout) {
+        ports::PortsProbe::Listed(list) => list,
+        probe => {
+            let reason = if probe == ports::PortsProbe::NoTools {
+                "neither ss nor lsof is available".to_string()
+            } else if output.timed_out {
+                "timed out".to_string()
             } else {
-                detail.to_string()
-            }
-        };
-        return Err(remote::RemoteError::Transfer(format!(
-            "could not list ports on {}: {reason}",
-            resolved.canonical
-        ))
-        .into());
+                let detail = remote::printable_lines(output.stderr.trim());
+                if !detail.is_empty() {
+                    detail
+                } else if output.code != 0 {
+                    format!("query exited {}", output.code)
+                } else {
+                    "the listing was cut off".to_string()
+                }
+            };
+            return Err(remote::RemoteError::Transfer(format!(
+                "could not list ports on {}: {reason}",
+                resolved.canonical
+            ))
+            .into());
+        }
     };
     if json {
         write_json(&list)

@@ -72,6 +72,8 @@ host. It refuses unless the agent is done or idle and its checkout is clean,
 on a branch, and pushed. When it refuses, fix what the message names on HOST
 and retry; `--force` only overrides the idle check, and then leaves both
 sessions running. Pass `--keep` to leave the source session alive on purpose.
+Exit status 3 means the session now runs on TARGET but still also
+runs on HOST; end one of them before continuing.
 The move runs the source's recorded resume command on TARGET, so move only
 between hosts you trust.
 

@@ -23,8 +23,8 @@ use crate::agents::{
 };
 use crate::config::{is_safe_session_name, FleetConfig, DEFAULT_TMUX_COMMAND};
 use crate::remote::{
-    sh_quote, validate_script_value, Endpoint, QueryOutput, RemoteError, Runner, REMOTE_PATH_SETUP,
-    TRANSFER_TIMEOUT,
+    printable, printable_lines, sh_quote, validate_script_value, Endpoint, QueryOutput,
+    RemoteError, Runner, REMOTE_PATH_SETUP, TRANSFER_TIMEOUT,
 };
 
 #[derive(Debug, Error)]
@@ -51,6 +51,13 @@ pub enum MoveError {
     MissingField(&'static str),
     #[error("fleet: could not read agent state on {host}: {reason}")]
     AgentState { host: String, reason: String },
+    #[error("fleet: {session} now runs on {target}, but it was not ended on {source_host}: {reason}; end it there yourself once you have checked it, then attach with: fleet ssh {target} {session}")]
+    BothRunning {
+        session: String,
+        source_host: String,
+        target: String,
+        reason: String,
+    },
     #[error("fleet: {host}: {reason}")]
     Step { host: String, reason: String },
     #[error(transparent)]
@@ -64,6 +71,7 @@ impl MoveError {
         match self {
             Self::UnknownHost(_) | Self::SameHost | Self::InvalidSession => 2,
             Self::Remote(error) => error.exit_code(),
+            Self::BothRunning { .. } => 3,
             _ => 1,
         }
     }
@@ -152,12 +160,23 @@ fn source_failure(code: i32) -> &'static str {
     }
 }
 
-pub fn parse_key_values(stdout: &str) -> BTreeMap<String, String> {
-    stdout
-        .lines()
-        .filter_map(|line| line.split_once('='))
-        .map(|(key, value)| (key.trim().to_string(), value.to_string()))
-        .collect()
+pub fn parse_key_values(stdout: &str) -> Result<BTreeMap<String, String>, String> {
+    let mut facts = BTreeMap::new();
+    for (key, value) in stdout.lines().filter_map(|line| line.split_once('=')) {
+        let key = key.trim().to_string();
+        if facts.insert(key.clone(), value.to_string()).is_some() {
+            return Err(key);
+        }
+    }
+    Ok(facts)
+}
+
+fn is_plain_absolute_path(path: &str) -> bool {
+    path.starts_with('/')
+        && path
+            .split('/')
+            .skip(1)
+            .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
 pub fn target_home_script() -> String {
@@ -183,7 +202,10 @@ mkdir -p {parent} || exit 27; \
 git clone --quiet -o {remote} -- {url} {dir} || exit 28; \
 cd {dir} || exit 24; \
 fi; \
-if git rev-parse -q --verify refs/heads/{branch} >/dev/null; then git checkout --quiet {branch} || exit 29; \
+git merge-base --is-ancestor {head} {tracking} || exit 31; \
+if git rev-parse -q --verify refs/heads/{branch} >/dev/null; then \
+git merge-base --is-ancestor refs/heads/{branch} {tracking} || git merge-base --is-ancestor {tracking} refs/heads/{branch} || exit 30; \
+git checkout --quiet {branch} || exit 29; \
 else git checkout --quiet -b {branch} --track {tracking} || exit 29; fi; \
 git merge --ff-only --quiet {tracking} || exit 30; \
 git merge-base --is-ancestor {head} HEAD || exit 31; \
@@ -272,7 +294,7 @@ pub fn rehome(path: &str, from_home: &str, to_home: &str) -> Option<String> {
 }
 
 fn step_error(side: &Side, output: &QueryOutput, reason: &str) -> MoveError {
-    let detail = output.stderr.trim();
+    let detail = printable_lines(output.stderr.trim());
     let reason = if output.timed_out {
         format!("{reason} (timed out)")
     } else if detail.is_empty() {
@@ -315,7 +337,7 @@ fn agents_on(
             reason: if output.code == 127 {
                 "fleet is not on the remote PATH".into()
             } else {
-                output.stderr.trim().to_string()
+                printable_lines(output.stderr.trim())
             },
         });
     }
@@ -331,6 +353,7 @@ fn agents_on(
 fn source_changed(
     source: &Side,
     record: &AgentRecord,
+    session: &str,
     runner: &Runner,
     agent_env: &AgentEnv,
 ) -> Option<String> {
@@ -339,6 +362,9 @@ fn source_changed(
         Err(error) => return Some(format!("could not re-check the source agent ({error})")),
     };
     match current {
+        Some(agent) if agent.tmux_session.as_deref() != Some(session) => Some(format!(
+            "the source agent's pane is no longer in session {session}"
+        )),
         Some(agent) if agent.updated_at != record.updated_at => {
             Some("the source agent reported activity after its transcript was copied".to_string())
         }
@@ -394,8 +420,8 @@ pub fn run_move(
             state: record.state.label().to_string(),
         });
     }
-    let resume =
-        resume_command(&record).ok_or_else(|| MoveError::NoResumeCommand(record.agent.clone()))?;
+    let resume = resume_command(&record)
+        .ok_or_else(|| MoveError::NoResumeCommand(printable(&record.agent)))?;
     let cwd = record.cwd.clone().ok_or(MoveError::MissingField("cwd"))?;
     // A recorded resume command replaces only how the agent restarts; any
     // known transcript still has to reach the target.
@@ -408,17 +434,48 @@ pub fn run_move(
     {
         validate_script_value(value)?;
     }
+    if !is_plain_absolute_path(&cwd) {
+        return Err(MoveError::Step {
+            host: source.name.clone(),
+            reason: format!(
+                "the agent's working directory is not a plain absolute path: {}",
+                printable(&cwd)
+            ),
+        });
+    }
+    if let Some(transcript) = record
+        .transcript
+        .as_deref()
+        .filter(|transcript| !is_plain_absolute_path(transcript))
+    {
+        return Err(MoveError::Step {
+            host: source.name.clone(),
+            reason: format!(
+                "the transcript path is not a plain absolute path: {}",
+                printable(transcript)
+            ),
+        });
+    }
     writeln!(
         out,
         "fleet: moving {} ({}) from {} to {}",
-        request.session, record.agent, source.name, target.name
+        request.session,
+        printable(&record.agent),
+        source.name,
+        target.name
     )?;
 
     let output = runner.run(&source.endpoint, &source_repo_script(&cwd));
     if !output.success() {
         return Err(step_error(&source, &output, source_failure(output.code)));
     }
-    let facts = parse_key_values(&output.stdout);
+    let facts = parse_key_values(&output.stdout).map_err(|key| MoveError::Step {
+        host: source.name.clone(),
+        reason: format!(
+            "the source checkout reported {} more than once",
+            printable(&key)
+        ),
+    })?;
     let fact = |key: &str| facts.get(key).cloned().unwrap_or_default();
     let repo = SourceRepo {
         top: fact("top"),
@@ -448,6 +505,17 @@ pub fn run_move(
     for value in reported {
         validate_script_value(value)?;
     }
+    for value in [&repo.top, &repo.home] {
+        if !is_plain_absolute_path(value) {
+            return Err(MoveError::Step {
+                host: source.name.clone(),
+                reason: format!(
+                    "the source checkout reported a path that is not a plain absolute path: {}",
+                    printable(value)
+                ),
+            });
+        }
+    }
     // These become git arguments on the target, where a leading `-` would be
     // read as an option.
     let option_like = [&repo.branch, &repo.remote, &repo.upstream, &repo.url]
@@ -456,7 +524,10 @@ pub fn run_move(
     if let Some(value) = option_like {
         return Err(MoveError::Step {
             host: source.name.clone(),
-            reason: format!("the source checkout reported an option-like git value: {value}"),
+            reason: format!(
+                "the source checkout reported an option-like git value: {}",
+                printable(value)
+            ),
         });
     }
     if !repo.head.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -464,26 +535,50 @@ pub fn run_move(
             host: source.name.clone(),
             reason: format!(
                 "the source checkout reported an invalid commit: {}",
-                repo.head
+                printable(&repo.head)
             ),
         });
     }
 
     let output = runner.run(&target.endpoint, &target_home_script());
     let target_home = parse_key_values(&output.stdout)
-        .remove("home")
+        .ok()
+        .and_then(|mut facts| facts.remove("home"))
         .filter(|home| output.success() && !home.is_empty())
         .ok_or_else(|| step_error(&target, &output, "cannot read the home directory"))?;
     validate_script_value(&target_home)?;
+    if !is_plain_absolute_path(&target_home) {
+        return Err(MoveError::Step {
+            host: target.name.clone(),
+            reason: format!(
+                "reported a home directory that is not a plain absolute path: {}",
+                printable(&target_home)
+            ),
+        });
+    }
     let target_top =
         rehome(&repo.top, &repo.home, &target_home).ok_or_else(|| MoveError::Step {
             host: source.name.clone(),
             reason: format!(
                 "the checkout {} is outside the home directory, so its place on {} is unknown",
-                repo.top, target.name
+                printable(&repo.top),
+                target.name
             ),
         })?;
-    let target_cwd = rehome(&cwd, &repo.home, &target_home).unwrap_or_else(|| target_top.clone());
+    let cwd_in_checkout = match cwd.strip_prefix(repo.top.as_str()) {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => rest,
+        _ => {
+            return Err(MoveError::Step {
+                host: source.name.clone(),
+                reason: format!(
+                    "the agent's working directory {} is not inside the checkout {}",
+                    printable(&cwd),
+                    printable(&repo.top)
+                ),
+            })
+        }
+    };
+    let target_cwd = format!("{target_top}{cwd_in_checkout}");
 
     writeln!(
         out,
@@ -504,7 +599,10 @@ pub fn run_move(
             target_transcript_path(&record, transcript, &repo.home, &target_home, &target_cwd)
                 .ok_or_else(|| MoveError::Step {
                     host: source.name.clone(),
-                    reason: format!("the transcript {transcript} is outside the home directory"),
+                    reason: format!(
+                        "the transcript {} is outside the home directory",
+                        printable(transcript)
+                    ),
                 })?;
         let dest_dir = destination
             .rsplit_once('/')
@@ -563,34 +661,49 @@ pub fn run_move(
         &start_script(&target.tmux, &request.session, &target_cwd, &resume),
     );
     if !output.success() {
-        let reason = if output.code == 41 {
-            "the resumed session exited right away; the source session was left running"
-        } else {
-            "starting the tmux session failed; the source session was left running"
+        let reason = match output.code {
+            41 if !output.timed_out => {
+                "the resumed session exited right away; the source session was left running"
+                    .to_string()
+            }
+            40 if !output.timed_out => {
+                "starting the tmux session failed; the source session was left running".to_string()
+            }
+            _ => format!(
+                "could not confirm the session started; the source session was left running, and {session} may already be running on {target} (check with: fleet ssh {target} {session})",
+                session = request.session,
+                target = target.name
+            ),
         };
-        return Err(step_error(&target, &output, reason));
+        return Err(step_error(&target, &output, &reason));
     }
 
     if request.keep {
         writeln!(out, "fleet: kept the source session on {}", source.name)?;
-    } else if let Some(reason) = source_changed(&source, &record, runner, agent_env) {
-        writeln!(
-            out,
-            "fleet: warning: {reason}; both sessions are running, so end {} on {} yourself once you have checked it",
-            request.session, source.name
-        )?;
     } else {
+        let both_running = |reason: String| MoveError::BothRunning {
+            session: request.session.clone(),
+            source_host: source.name.clone(),
+            target: target.name.clone(),
+            reason,
+        };
+        if let Some(reason) = source_changed(&source, &record, &request.session, runner, agent_env)
+        {
+            return Err(both_running(reason));
+        }
         let output = runner.run(
             &source.endpoint,
             &stop_script(&source.tmux, &request.session),
         );
         if !output.success() {
-            writeln!(
-                out,
-                "fleet: warning: could not end {} on {}; end it yourself",
-                request.session, source.name
-            )?;
-        } else if source.is_local {
+            let detail = printable_lines(output.stderr.trim());
+            return Err(both_running(if detail.is_empty() {
+                "could not end the source session".to_string()
+            } else {
+                format!("could not end the source session: {detail}")
+            }));
+        }
+        if source.is_local {
             if let (Ok(dir), Some(id)) = (agent_env.state_dir(), record.session_id.as_deref()) {
                 let _ = clear_records(&dir, None, Some(id));
             }
@@ -697,6 +810,9 @@ mod tests {
         assert!(prep.contains("'/home/dev/Local/it'\"'\"'s'"));
         assert!(prep.contains("--track 'origin/feature/x'"), "{prep}");
         assert!(prep.contains("--is-ancestor '0123abcd' HEAD"), "{prep}");
+        let first_ancestry = prep.find("--is-ancestor").unwrap();
+        let first_checkout = prep.find("git checkout").unwrap();
+        assert!(first_ancestry < first_checkout, "{prep}");
         for script in [
             prep,
             source_repo_script("/Users/dev/app"),
@@ -710,8 +826,32 @@ mod tests {
 
     #[test]
     fn key_values_parse() {
-        let facts = parse_key_values("top=/a\nbranch=main\nurl=git@x:y=z\nnoise\n");
+        let facts = parse_key_values("top=/a\nbranch=main\nurl=git@x:y=z\nnoise\n").unwrap();
         assert_eq!(facts["url"], "git@x:y=z");
         assert_eq!(facts.len(), 3);
+    }
+
+    #[test]
+    fn a_repeated_key_is_rejected() {
+        assert_eq!(
+            parse_key_values("top=/a\nurl=x\ntop=/b\n"),
+            Err("top".to_string())
+        );
+    }
+
+    #[test]
+    fn plain_absolute_paths() {
+        assert!(is_plain_absolute_path("/home/dev/src/app"));
+        for path in [
+            "/home/dev/../etc",
+            "/home/dev/./x",
+            "/home/dev//x",
+            "/home/dev/x/",
+            "relative/path",
+            "/",
+            "",
+        ] {
+            assert!(!is_plain_absolute_path(path), "{path}");
+        }
     }
 }

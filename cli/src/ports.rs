@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 
 use serde::Serialize;
 
-use crate::remote::REMOTE_PATH_SETUP;
+use crate::remote::{printable, REMOTE_PATH_SETUP};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct ListeningPort {
@@ -23,25 +23,41 @@ pub struct ListeningPort {
 pub fn ports_script() -> String {
     format!(
         ": fleet-ports; {REMOTE_PATH_SETUP}; \
-if command -v ss >/dev/null 2>&1; then echo @ss; ss -ltnpH 2>/dev/null; \
-elif command -v lsof >/dev/null 2>&1; then echo @lsof; lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null; \
+if command -v ss >/dev/null 2>&1; then echo @ss; ss -ltnpH 2>/dev/null; echo @end; \
+elif command -v lsof >/dev/null 2>&1; then echo @lsof; lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null; echo @end; \
 else echo @none; fi"
     )
 }
 
-/// Parse the probe output. `None` when the host had neither `ss` nor `lsof`.
-pub fn parse_ports(stdout: &str) -> Option<Vec<ListeningPort>> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PortsProbe {
+    Listed(Vec<ListeningPort>),
+    NoTools,
+    Incomplete,
+}
+
+/// `Listed` only when a tool marker is followed by `@end`; `NoTools` for `@none`; otherwise `Incomplete`.
+pub fn parse_ports(stdout: &str) -> PortsProbe {
     let mut lines = stdout.lines();
     let parser: fn(&str) -> Option<ListeningPort> = loop {
-        match lines.next()?.trim() {
+        let Some(line) = lines.next() else {
+            return PortsProbe::Incomplete;
+        };
+        match line.trim() {
             "@ss" => break parse_ss_line,
             "@lsof" => break parse_lsof_line,
-            "@none" => return None,
+            "@none" => return PortsProbe::NoTools,
             _ => continue,
         }
     };
-    let unique: BTreeSet<ListeningPort> = lines.filter_map(parser).collect();
-    Some(unique.into_iter().collect())
+    let mut unique = BTreeSet::new();
+    for line in lines {
+        if line.trim() == "@end" {
+            return PortsProbe::Listed(unique.into_iter().collect());
+        }
+        unique.extend(parser(line));
+    }
+    PortsProbe::Incomplete
 }
 
 /// `LISTEN 0 4096 127.0.0.1:5173 0.0.0.0:* users:(("node",pid=812,fd=21))`
@@ -106,12 +122,18 @@ pub fn render_ports(host: &str, ports: &[ListeningPort]) -> String {
     let mut seen = BTreeSet::new();
     for port in ports {
         let process = match (&port.process, port.pid) {
-            (Some(name), Some(pid)) => format!("{name} ({pid})"),
-            (Some(name), None) => name.clone(),
+            (Some(name), Some(pid)) => format!("{} ({pid})", printable(name)),
+            (Some(name), None) => printable(name),
             (None, Some(pid)) => format!("pid {pid}"),
             (None, None) => "-".into(),
         };
-        let _ = writeln!(out, "{:<7} {:<24} {}", port.port, port.address, process);
+        let _ = writeln!(
+            out,
+            "{:<7} {:<24} {}",
+            port.port,
+            printable(&port.address),
+            process
+        );
         seen.insert(port.port);
     }
     if let Some(first) = seen.iter().next() {
@@ -132,8 +154,10 @@ mod tests {
         let stdout = "@ss\n\
 LISTEN 0 4096 127.0.0.1:5173 0.0.0.0:* users:((\"node\",pid=812,fd=21))\n\
 LISTEN 0 128 [::]:22 [::]:*\n\
-LISTEN 0 4096 [::1]:5173 [::]:* users:((\"node\",pid=812,fd=22))\n";
-        let ports = parse_ports(stdout).unwrap();
+LISTEN 0 4096 [::1]:5173 [::]:* users:((\"node\",pid=812,fd=22))\n@end\n";
+        let PortsProbe::Listed(ports) = parse_ports(stdout) else {
+            panic!("expected a complete listing");
+        };
         assert_eq!(ports.len(), 3);
         assert_eq!(ports[0].port, 22);
         assert_eq!(ports[0].address, "::");
@@ -148,17 +172,30 @@ LISTEN 0 4096 [::1]:5173 [::]:* users:((\"node\",pid=812,fd=22))\n";
         let stdout = "noise from a login shell\n@lsof\n\
 COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME\n\
 node 812 dev 21u IPv4 0xabc 0t0 TCP 127.0.0.1:5173 (LISTEN)\n\
-node 812 dev 22u IPv6 0xdef 0t0 TCP *:5173 (LISTEN)\n";
-        let ports = parse_ports(stdout).unwrap();
+node 812 dev 22u IPv6 0xdef 0t0 TCP *:5173 (LISTEN)\n@end\n";
+        let PortsProbe::Listed(ports) = parse_ports(stdout) else {
+            panic!("expected a complete listing");
+        };
         assert_eq!(ports.len(), 2);
         assert!(ports.iter().all(|p| p.pid == Some(812)));
         assert!(ports.iter().any(|p| p.address == "*"));
     }
 
     #[test]
-    fn no_tools_is_none() {
-        assert_eq!(parse_ports("@none\n"), None);
-        assert_eq!(parse_ports(""), None);
+    fn no_tools_and_cut_off_output_are_told_apart() {
+        assert_eq!(parse_ports("@none\n"), PortsProbe::NoTools);
+        assert_eq!(parse_ports(""), PortsProbe::Incomplete);
+        assert_eq!(
+            parse_ports(
+                "@ss\nLISTEN 0 4096 127.0.0.1:5173 0.0.0.0:* users:((\"node\",pid=812,fd=21))\n"
+            ),
+            PortsProbe::Incomplete
+        );
+    }
+
+    #[test]
+    fn an_empty_listing_is_complete() {
+        assert_eq!(parse_ports("@lsof\n@end\n"), PortsProbe::Listed(vec![]));
     }
 
     #[test]

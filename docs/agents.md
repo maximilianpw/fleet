@@ -25,9 +25,10 @@ are ignored.
 
 Inside tmux, a record is keyed by `$TMUX_PANE`, and Fleet asks tmux for the
 session name and the server's PID. tmux reuses pane ids after a server
-restart, so a record belongs to a pane only while both match. Outside tmux,
-the session id is the key. Text fields are stored on one line without control
-characters. Records live in
+restart, so a record belongs to a pane only while both match.
+Listings report the session the pane is in now, so a renamed session shows
+under its new name. Outside tmux, the session id is the key. Text fields are
+stored on one line without control characters. Records live in
 `$XDG_STATE_HOME/fleet/agents/` (default `~/.local/state/fleet/agents/`).
 
 `fleet hook` exits 0 on success and 1 on any error, including arguments the
@@ -96,7 +97,8 @@ Fleet refuses, and changes nothing, unless:
 - that agent is done or idle (`--force` overrides only this check);
 - its checkout is a clean git branch whose HEAD equals its upstream, and the
   upstream is on a remote;
-- the checkout is under HOST's home directory.
+- the checkout is under HOST's home directory, the agent's working directory
+  is inside it, and none of the reported paths contain `.` or `..` components.
 
 Then it:
 
@@ -105,7 +107,10 @@ Then it:
    fetches, checks out the branch, and fast-forwards only to the upstream
    branch, which may be named differently from the local one. The branch must
    then contain the commit HOST is on. Checking out the branch switches that
-   checkout for anything else working in it on TARGET;
+   checkout for anything else working in it on TARGET. Fleet verifies the
+   fast-forward and the commit before switching, so a refused move leaves an
+   existing checkout on its branch. A checkout that Fleet cloned for a move
+   that is then refused stays on TARGET;
 2. copies the transcript from HOST to TARGET through this machine. It is
    written beside its final path and moved into place only after both the
    read and the write succeeded, so a failed copy never replaces a transcript;
@@ -117,10 +122,17 @@ Then it:
    move between hosts you trust;
 4. re-reads the source agent's state and ends SESSION on HOST, unless
    `--keep`. If the source agent reported again after its transcript was
-   copied, or is still running or waiting (a `--force` move), both sessions
-   are left running with a warning, so nothing typed there is lost.
+   copied, is still running or waiting (a `--force` move), or its pane is
+   no longer in SESSION, both sessions are left running and `fleet move` exits
+   3, so nothing typed there is lost.
 
 If any step fails, the source session keeps running.
+
+Exit status: 0 the session moved (or the source was kept with `--keep`);
+1 the move was refused or failed and the source is untouched; 2 invalid
+arguments; 3 the session runs on TARGET but was not ended on HOST. When
+Fleet could not confirm that the target session started, it exits 1 and
+says the target may already be running.
 
 Transcript placement relies on agent internals that may change:
 

@@ -64,9 +64,23 @@ impl QueryOutput {
     }
 }
 
+/// Text reported by a host, made safe to print: session names, agent names,
+/// and versions arrive over SSH and could carry terminal escape sequences.
+pub fn printable(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { '?' } else { c })
+        .collect()
+}
+
+pub fn printable_lines(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() && c != '\n' { '?' } else { c })
+        .collect()
+}
+
 #[derive(Debug, Error)]
 pub enum RemoteError {
-    #[error("fleet: value contains a backslash or control character and cannot be sent to a remote shell: {0}")]
+    #[error("fleet: value contains a backslash or control character and cannot be sent to a remote shell: {0:?}")]
     UnsafeValue(String),
     #[error("fleet: transfer failed: {0}")]
     Transfer(String),
@@ -392,6 +406,12 @@ fn prepare_control_dir(env: &ProcessEnv) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn printable_replaces_control_characters() {
+        assert_eq!(printable("a\u{1b}]0;x\u{7}b"), "a?]0;x?b");
+        assert_eq!(printable_lines("a\n\u{1b}[2Jb\r"), "a\n?[2Jb?");
+    }
 
     #[test]
     fn quote_round_trips_single_quotes() {
