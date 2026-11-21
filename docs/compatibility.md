@@ -29,7 +29,7 @@ tests here is not acceptance on live hosts.
   bracketed forms passed through inside one `-L` argument.
 - Unknown SSH aliases keep command-specific fallbacks: `ssh unknown` uses
   `tm-unknown`; shell/run use `unknown`; forward uses `fleet-forward-unknown`;
-  doctor, t3, and copy still require declared metadata.
+  doctor, t3, computer, and copy still require declared metadata.
 - Managed job labels stay `org.nix-community.home.fleet-tunnel-PORT`. Pause
   intent lives in launchd against those labels. Renaming them is a migration.
 
@@ -65,6 +65,12 @@ and prevents its internal loop from reconnecting.
   host it also appends `fleet: VERSION|missing`. A missing tmux is
   `unhealthy:`. A missing or different `fleet` is only a `warning:` line.
   Exit codes keep their meaning.
+- `computer HOST` runs `cua-driver mcp` for an MCP client: locally on the
+  current host, otherwise through `ssh -T` with `BatchMode=yes`,
+  `ForwardAgent=no`, keepalives, and no multiplexing. It requires a declared
+  host with `gui = true`.
+- `doctor HOST` on a remote `gui` host appends `cua-driver: VERSION|missing`
+  after the fleet line. A missing `cua-driver` is only a `warning:` line.
 - `tailscale_name` host field.
 - Help text lists the commands above.
 

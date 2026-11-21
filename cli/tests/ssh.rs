@@ -15,7 +15,7 @@ use fleet::process::{
     parse_ps_output, ObservedProcess, ProcessEnv, ProcessError, ProcessTable, SignalSender,
 };
 use fleet::ssh::{
-    parse_ssh_tail, plan_ad_hoc_forward, plan_run, plan_shell, plan_ssh, plan_t3,
+    parse_ssh_tail, plan_ad_hoc_forward, plan_computer, plan_run, plan_shell, plan_ssh, plan_t3,
     AttachmentForward, SshError,
 };
 use fleet::PlannedCommand;
@@ -337,6 +337,42 @@ fn t3_rejects_host_without_port_metadata() {
 }
 
 #[test]
+fn computer_requires_a_declared_gui_host() {
+    let config = parse_config(MINIMAL_TOML).unwrap();
+    match plan_computer(&config, "dev") {
+        Err(SshError::NoGui(host)) => assert_eq!(host, "workbox"),
+        other => panic!("unexpected {other:?}"),
+    }
+    match plan_computer(&config, "ghost") {
+        Err(SshError::UnknownHost(host)) => assert_eq!(host, "ghost"),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[test]
+fn computer_runs_cua_driver_directly_on_the_current_host() {
+    let config = parse_config(MINIMAL_TOML).unwrap();
+    let planned = plan_computer(&config, "laptop").unwrap();
+    assert_eq!(planned.program, "cua-driver");
+    assert_eq!(planned.args, ["mcp"]);
+}
+
+#[test]
+fn computer_runs_cua_driver_over_non_interactive_ssh() {
+    let config = parse_config(&MINIMAL_TOML.replace("gui = false", "gui = true")).unwrap();
+    let planned = plan_computer(&config, "dev").unwrap();
+    assert_eq!(planned.program, "ssh");
+    assert_eq!(planned.args[0], "-T");
+    for option in ["BatchMode=yes", "ForwardAgent=no", "ServerAliveInterval=15"] {
+        assert!(planned.args.contains(&option.into()), "{:?}", planned.args);
+    }
+    assert_eq!(planned.args[planned.args.len() - 2], "workbox");
+    let remote = planned.args.last().unwrap();
+    assert!(remote.starts_with("sh -c ': fleet-computer;"), "{remote}");
+    assert!(remote.ends_with("exec cua-driver mcp'"), "{remote}");
+}
+
+#[test]
 fn ad_hoc_forward_passes_bracketed_remote_host_as_data() {
     let config = parse_config(MINIMAL_TOML).unwrap();
     let planned = plan_ad_hoc_forward(&config, "workbox", 3000, 4000, "[::1]").unwrap();
@@ -520,6 +556,32 @@ fn binary_shell_and_run_paths() {
         fixture.ssh_args(),
         Some(vec!["workbox".into(), "echo".into(), "hello world".into()])
     );
+}
+
+#[test]
+fn binary_computer_execs_ssh_and_refuses_hosts_without_gui() {
+    let fixture = Fixture::new();
+    fixture.write_xdg_config(&MINIMAL_TOML.replace("gui = false", "gui = true"));
+    let output = fixture
+        .fleet()
+        .args(["computer", "workbox"])
+        .output()
+        .unwrap();
+    let (_, stderr, code) = Fixture::output_text(&output);
+    assert_eq!(code, 0, "{stderr}");
+    let args = fixture.ssh_args().expect("computer ssh");
+    assert_eq!(args[0], "-T");
+    assert!(args.last().unwrap().contains("exec cua-driver mcp"));
+
+    fixture.write_xdg_config(MINIMAL_TOML);
+    let output = fixture
+        .fleet()
+        .args(["computer", "workbox"])
+        .output()
+        .unwrap();
+    let (_, stderr, code) = Fixture::output_text(&output);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("no GUI session"), "{stderr}");
 }
 
 #[test]

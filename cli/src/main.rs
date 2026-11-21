@@ -15,7 +15,8 @@ use fleet::process::{exec_replace, PathKill, PathPsTable, ProcessEnv, ProcessTab
 use fleet::remote::Runner;
 use fleet::select::HostFilter;
 use fleet::ssh::{
-    local_ports_of, parse_ssh_tail, plan_ad_hoc_forward, plan_run, plan_shell, plan_ssh, plan_t3,
+    local_ports_of, parse_ssh_tail, plan_ad_hoc_forward, plan_computer, plan_run, plan_shell,
+    plan_ssh, plan_t3,
 };
 use fleet::{
     render_list_json, run_doctor_command, run_local_agents, run_pick_command, run_ports_command,
@@ -126,6 +127,9 @@ enum Commands {
         host: String,
         local_port: Option<String>,
     },
+    /// Run Cua Driver's stdio MCP server on a GUI host, for an MCP client to launch.
+    #[command(after_help = "Example:\n  claude mcp add studio-computer -- fleet computer studio")]
+    Computer { host: String },
     /// Show, pause, or resume supervised localhost tunnels.
     #[command(subcommand_required = false)]
     Tunnel {
@@ -382,6 +386,11 @@ fn run(cli: Cli) -> Result<(), FleetError> {
             });
             ensure_ports_free(&[port], &table.list()?)?;
             exec_replace(&planned)?;
+            Ok(())
+        }
+        Some(Commands::Computer { host }) => {
+            let config = load_config(cli.config.as_deref(), &env)?;
+            exec_replace(&plan_computer(&config, &host)?)?;
             Ok(())
         }
         Some(Commands::Tunnel { command }) => {

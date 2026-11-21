@@ -231,6 +231,54 @@ fn doctor_single_host_text_keeps_historical_lines_first() {
 }
 
 #[test]
+fn doctor_reports_cua_driver_only_on_gui_hosts() {
+    let fixture = Fixture::new();
+    fixture.write_xdg_config(MINIMAL_TOML);
+    fixture.respond("workbox", "fleet-probe", &probe("[]"), 0);
+    let output = fixture
+        .fleet_scripted()
+        .args(["doctor", "workbox"])
+        .output()
+        .unwrap();
+    let (stdout, _, code) = Fixture::output_text(&output);
+    assert_eq!(code, 0);
+    assert!(!stdout.contains("cua-driver"), "{stdout}");
+    assert!(!fixture
+        .ssh_calls()
+        .contains(&"workbox fleet-cua".to_string()));
+
+    fixture.write_xdg_config(&MINIMAL_TOML.replace("gui = false", "gui = true"));
+    fixture.respond("workbox", "fleet-cua", "cua-driver 0.56.8\n", 0);
+    let output = fixture
+        .fleet_scripted()
+        .args(["doctor", "workbox"])
+        .output()
+        .unwrap();
+    let (stdout, _, code) = Fixture::output_text(&output);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("cua-driver: 0.56.8"), "{stdout}");
+
+    fixture.respond("workbox", "fleet-cua", "missing\n", 0);
+    let output = fixture
+        .fleet_scripted()
+        .args(["doctor", "workbox", "--json"])
+        .output()
+        .unwrap();
+    let (stdout, _, code) = Fixture::output_text(&output);
+    assert_eq!(code, 0, "a missing cua-driver is only a warning");
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let events = value["events"].as_array().unwrap();
+    assert!(events
+        .iter()
+        .any(|event| event["kind"] == "cua_driver" && event["version"].is_null()));
+    assert!(events.iter().any(|event| event["kind"] == "warning"
+        && event["text"]
+            .as_str()
+            .unwrap()
+            .contains("fleet computer needs it")));
+}
+
+#[test]
 fn list_and_tunnel_status_json() {
     let fixture = Fixture::new();
     fixture.write_xdg_config(MINIMAL_TOML);
@@ -808,6 +856,8 @@ fn wrapped_scripts_survive_posix_and_fish_login_shells() {
 
     let scripts = [
         fleet::status::remote_probe_script("/run/current-system/sw/bin/tmux"),
+        fleet::status::cua_driver_script(),
+        fleet::ssh::computer_script(),
         fleet::ports::ports_script(),
         fleet::moving::source_repo_script("/home/dev/it's here"),
         fleet::moving::target_prep_script(

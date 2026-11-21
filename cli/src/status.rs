@@ -269,8 +269,46 @@ pub fn gather(
     })
 }
 
+pub fn cua_driver_script() -> String {
+    format!(
+        ": fleet-cua; {REMOTE_PATH_SETUP}; \
+if command -v cua-driver >/dev/null 2>&1; then cua-driver --version 2>/dev/null; else echo missing; fi"
+    )
+}
+
+fn cua_driver_event(resolved: &ResolvedHost, runner: &Runner) -> Vec<DoctorEvent> {
+    let output = runner.run(
+        &Endpoint::Ssh {
+            target: resolved.ssh_target.clone(),
+        },
+        &cua_driver_script(),
+    );
+    let first = output.stdout.lines().next().map(str::trim);
+    match (output.success(), first) {
+        (true, Some("missing")) => vec![
+            DoctorEvent::CuaDriver { version: None },
+            DoctorEvent::Warning {
+                text: format!(
+                    "cua-driver is not on the non-interactive SSH PATH of {}; fleet computer needs it",
+                    resolved.canonical
+                ),
+            },
+        ],
+        (true, Some(line)) if !line.is_empty() => vec![DoctorEvent::CuaDriver {
+            version: Some(
+                line.strip_prefix("cua-driver ")
+                    .unwrap_or(line)
+                    .trim()
+                    .to_string(),
+            ),
+        }],
+        _ => Vec::new(),
+    }
+}
+
 /// Doctor's tool checks: tmux must exist; a missing or different `fleet` is a
-/// warning, because only `agents` and `move` need it remotely.
+/// warning, because only `agents` and `move` need it remotely. A GUI host
+/// without `cua-driver` is also only a warning.
 pub fn doctor_tool_events(resolved: &ResolvedHost, runner: &Runner) -> Vec<DoctorEvent> {
     let (tmux, fleet, command) = if resolved.is_local {
         (
@@ -341,6 +379,9 @@ pub fn doctor_tool_events(resolved: &ResolvedHost, runner: &Runner) -> Vec<Docto
             });
         }
         FleetPresence::Unknown => {}
+    }
+    if resolved.gui {
+        events.extend(cua_driver_event(resolved, runner));
     }
     events
 }

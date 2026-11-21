@@ -14,6 +14,7 @@ use crate::config::{
     DEFAULT_TMUX_COMMAND, DEFAULT_TMUX_SESSION,
 };
 use crate::process::{PlannedCommand, ProcessEnv};
+use crate::remote::{wrap_for_login_shell, REMOTE_PATH_SETUP};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttachmentForward {
@@ -66,6 +67,8 @@ pub enum SshError {
     MissingT3Port(String),
     #[error("fleet: unknown Fleet host: {0}")]
     UnknownHost(String),
+    #[error("fleet: host has no GUI session for Cua Driver: {0}")]
+    NoGui(String),
     #[error("fleet: run requires a command")]
     MissingRunCommand,
     #[error(transparent)]
@@ -242,6 +245,47 @@ pub fn plan_t3(
     let local_port = local_port.unwrap_or(remote_port);
     let spec = format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}");
     Ok(dedicated_forward_command(&spec, &resolved.forward_target))
+}
+
+pub fn computer_script() -> String {
+    format!(": fleet-computer; {REMOTE_PATH_SETUP}; exec cua-driver mcp")
+}
+
+/// BatchMode and keepalives make an MCP client fail instead of hanging on a
+/// prompt or on a host that went to sleep.
+pub fn plan_computer(config: &FleetConfig, host: &str) -> Result<PlannedCommand, SshError> {
+    validate_ssh_target(host)?;
+    let Some(resolved) = config.resolve(host) else {
+        return Err(SshError::UnknownHost(host.to_string()));
+    };
+    if !resolved.gui {
+        return Err(SshError::NoGui(resolved.canonical));
+    }
+    if resolved.is_local {
+        return Ok(PlannedCommand::program(
+            "cua-driver".into(),
+            vec!["mcp".into()],
+            "run the local Cua Driver MCP server",
+        ));
+    }
+    let mut args: Vec<String> = vec!["-T".into()];
+    for option in [
+        "BatchMode=yes",
+        "ForwardAgent=no",
+        "ServerAliveInterval=15",
+        "ServerAliveCountMax=3",
+        "ControlMaster=no",
+        "ControlPath=none",
+    ] {
+        args.push("-o".into());
+        args.push(option.into());
+    }
+    args.push(resolved.ssh_target);
+    args.push(wrap_for_login_shell(&computer_script()));
+    Ok(PlannedCommand::ssh(
+        args,
+        "run a remote Cua Driver MCP server",
+    ))
 }
 
 pub fn plan_ad_hoc_forward(

@@ -262,6 +262,9 @@ pub enum DoctorEvent {
     Fleet {
         version: Option<String>,
     },
+    CuaDriver {
+        version: Option<String>,
+    },
     Warning {
         text: String,
     },
@@ -294,6 +297,10 @@ impl DoctorEvent {
             Self::Fleet { version } => match version {
                 Some(version) => format!("fleet: {}", printable(version)),
                 None => "fleet: missing".into(),
+            },
+            Self::CuaDriver { version } => match version {
+                Some(version) => format!("cua-driver: {}", printable(version)),
+                None => "cua-driver: missing".into(),
             },
             Self::Warning { text } => format!("warning: {}", printable_lines(text)),
         }

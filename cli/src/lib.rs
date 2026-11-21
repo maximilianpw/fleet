@@ -60,6 +60,7 @@ usage:
   fleet forward stop PID...
   fleet forward delete PID...
   fleet t3 HOST [LOCAL_PORT]
+  fleet computer HOST
   fleet tunnel status [--json]
   fleet tunnel pause PORT
   fleet tunnel resume PORT

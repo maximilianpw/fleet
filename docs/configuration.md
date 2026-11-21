@@ -42,7 +42,7 @@ Required host fields:
 | `role` | Shown by `list`. |
 | `user` | Display metadata. Not an SSH `User` override. OpenSSH still owns login, port, and identity. |
 | `client_enrolled` | Outbound identity enrolled. `list` prints yes or no. |
-| `gui` | GUI or screenshot surface. |
+| `gui` | GUI or screenshot surface; `fleet computer` requires it. |
 | `long_running_agents` | Whether unattended agent work should run here. |
 
 Optional host fields, with runtime defaults:

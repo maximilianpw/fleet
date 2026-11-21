@@ -46,6 +46,7 @@ fleet run workbox make test             # one-off command over SSH
 fleet copy -r ./site workbox:/tmp/site  # scp-style copy, through Fleet's names
 fleet ports workbox                     # what is listening there
 fleet forward workbox 3000 3000         # forward a port to localhost
+fleet computer laptop                   # Cua Driver MCP server on a GUI host
 fleet doctor                            # check SSH, tunnels, tmux on every host
 
 # Pick a machine by what it is, not by name:
@@ -163,7 +164,7 @@ Hook setup and the exact move rules are in [docs/agents.md](docs/agents.md).
 ## How it works
 
 - **Every connection is plain OpenSSH.** `fleet ssh`, `shell`, `run`, `copy`,
-  and `forward` replace themselves with `ssh` or `scp`. Signals, exit codes,
+  `forward`, and `computer` replace themselves with `ssh` or `scp`. Signals, exit codes,
   and terminal handling are OpenSSH's own.
 - **Multi-host queries run in parallel** (`status`, `agents`, `doctor`,
   `ports`, `move`). Each sends one POSIX `sh` script per host. Repeated

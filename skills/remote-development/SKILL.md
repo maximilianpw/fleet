@@ -60,6 +60,15 @@ reachability, or a missing tool.
   pause PORT` and `fleet tunnel resume PORT` for those.
 - `fleet t3 HOST [LOCAL_PORT]` forwards T3 Code when the host declares a port.
 
+## Desktop apps
+
+`fleet computer HOST` runs Cua Driver's stdio MCP server on a `gui` host, so
+an MCP client on any machine can drive that host's real desktop. It is meant
+to be launched by the client, for example `claude mcp add HOST-computer --
+fleet computer HOST`, not run by hand. The host must be awake and logged in.
+It drives the user's signed-in apps, so register it only for interactive
+sessions, never for unattended agents.
+
 ## Coding agents
 
 `fleet agents [HOST...] [--json]` lists every agent that reports through
